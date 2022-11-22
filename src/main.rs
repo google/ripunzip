@@ -14,7 +14,7 @@
 
 use std::{
     fs::{create_dir_all, File},
-    io::SeekFrom,
+    io::{SeekFrom, BufReader},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -33,31 +33,37 @@ struct Args {
     zipfile: PathBuf,
 }
 
-#[derive(Clone)]
-struct CloneableFile {
-    file: Arc<Mutex<File>>,
+trait HasLength {
+    fn len(&self) -> u64;
+}
+
+struct CloneableSeekableReader<R: Read + Seek + HasLength> {
+    file: Arc<Mutex<R>>,
     pos: u64,
     // TODO determine and store this once instead of per cloneable file
     file_length: Option<u64>,
 }
 
-impl<'a> CloneableFile {
-    fn new(file: File) -> Self {
+impl<R: Read + Seek + HasLength> Clone for CloneableSeekableReader<R> {
+    fn clone(&self) -> Self {
+        Self { file: self.file.clone(), pos: self.pos.clone(), file_length: self.file_length.clone() }
+    }
+}
+
+impl<R: Read + Seek + HasLength> CloneableSeekableReader<R> {
+    fn new(file: R) -> Self {
         Self {
             file: Arc::new(Mutex::new(file)),
             pos: 0u64,
             file_length: None,
         }
     }
-}
 
-impl CloneableFile {
     fn ascertain_file_length(&mut self) -> u64 {
         match self.file_length {
             Some(file_length) => file_length,
             None => {
-                let len = self.file.lock().unwrap().metadata().unwrap().len();
-                println!("File length determined to be {}", len);
+                let len = self.file.lock().unwrap().len();
                 self.file_length = Some(len);
                 len
             }
@@ -65,7 +71,7 @@ impl CloneableFile {
     }
 }
 
-impl Read for CloneableFile {
+impl<R: Read + Seek + HasLength> Read for CloneableSeekableReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut underlying_file = self.file.lock().expect("Unable to get underlying file");
         // TODO share an object which knows current position to avoid unnecessary
@@ -80,7 +86,7 @@ impl Read for CloneableFile {
     }
 }
 
-impl Seek for CloneableFile {
+impl<R: Read + Seek + HasLength> Seek for CloneableSeekableReader<R> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos = match pos {
             SeekFrom::Start(pos) => pos,
@@ -105,10 +111,24 @@ impl Seek for CloneableFile {
     }
 }
 
+impl<R: HasLength> HasLength for BufReader<R> {
+    fn len(&self) -> u64 {
+        self.get_ref().len()
+    }
+}
+
+impl HasLength for File {
+    fn len(&self) -> u64 {
+        self.metadata().unwrap().len()
+    }
+}
+
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let zipfile = File::open(args.zipfile)?;
-    let zipfile = CloneableFile::new(zipfile);
+    //let zipfile = BufReader::new(zipfile);
+    let zipfile = CloneableSeekableReader::new(zipfile);
     let zip = zip::ZipArchive::new(zipfile)?;
     let file_count = zip.len();
     println!("Zip has {} files", file_count);
