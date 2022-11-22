@@ -5,7 +5,7 @@ MYDIR=$(pwd)
 
 mkdir /tmp/testa
 pushd /tmp/testa
-time sh -c "unzip -l $ZIPFILE > /dev/null"
+time sh -c "unzip $ZIPFILE > /dev/null"
 popd
 
 rm -Rf /tmp/testa
