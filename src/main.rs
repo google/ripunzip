@@ -20,7 +20,7 @@ use std::{
 };
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
 use crate::cloneable_seekable_reader::CloneableSeekableReader;
@@ -29,14 +29,47 @@ use crate::cloneable_seekable_reader::CloneableSeekableReader;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Zip file to unzip
-    #[arg(value_name = "FILE")]
-    zipfile: PathBuf,
+    #[command(subcommand)]
+    command: Commands,
+
+    #[arg(short, long, value_name = "DIRECTORY")]
+    output_directory: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// unzips a zip file
+    File {
+        /// Zip file to unzip
+        #[arg(value_name = "FILE")]
+        zipfile: PathBuf,
+    },
+    /// downloads and unzips a zip file
+    Uri {
+        /// URI of zip file to download and unzip
+        #[arg(value_name = "URI")]
+        uri: String,
+    },
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let zipfile = File::open(args.zipfile)?;
+    match &args.command {
+        Commands::File { zipfile } => {
+            let zipfile = File::open(zipfile)?;
+            unzip_file(zipfile, &args.output_directory)
+        }
+        Commands::Uri { uri } => {
+            println!("Downloading URI {}", uri);
+            let mut response = reqwest::blocking::get(uri)?;
+            let mut tempfile = tempfile::tempfile()?;
+            std::io::copy(&mut response, &mut tempfile)?;
+            unzip_file(tempfile, &args.output_directory)
+        }
+    }
+}
+
+fn unzip_file(zipfile: File, output_directory: &Option<PathBuf>) -> Result<()> {
     // The following line doesn't actually seem to make any significant
     // performance difference.
     // let zipfile = BufReader::new(zipfile);
@@ -52,7 +85,10 @@ fn main() -> Result<()> {
         if name.ends_with('/') {
             println!("Skipping, directory");
         } else {
-            let out_file = PathBuf::from(file.name());
+            let out_file = match output_directory {
+                Some(output_directory) => output_directory.join(file.name()),
+                None => PathBuf::from(file.name()),
+            };
             if let Some(parent) = out_file.parent() {
                 create_dir_all(parent).unwrap_or_else(|err| {
                     panic!("Unable to create parent directories for {}: {}", name, err)
