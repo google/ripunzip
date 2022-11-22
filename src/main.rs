@@ -14,7 +14,7 @@
 
 use std::{
     fs::{create_dir_all, File},
-    io::{SeekFrom, BufReader},
+    io::{BufReader, SeekFrom},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -33,10 +33,18 @@ struct Args {
     zipfile: PathBuf,
 }
 
+/// A trait to represent some reader which has a total length known in
+/// advance. This is roughly equivalent to the nightly
+/// [`Seek::stream_len`] API.
 trait HasLength {
+    /// Return the current total length of this stream.
     fn len(&self) -> u64;
 }
 
+/// A [`Read`] which refers to its underlying stream by reference count,
+/// and thus can be cloned cheaply. It supports seeking; each cloned instance
+/// maintains its own pointer into the file, and the underlying instance
+/// is seeked prior to each read.
 struct CloneableSeekableReader<R: Read + Seek + HasLength> {
     file: Arc<Mutex<R>>,
     pos: u64,
@@ -46,11 +54,20 @@ struct CloneableSeekableReader<R: Read + Seek + HasLength> {
 
 impl<R: Read + Seek + HasLength> Clone for CloneableSeekableReader<R> {
     fn clone(&self) -> Self {
-        Self { file: self.file.clone(), pos: self.pos.clone(), file_length: self.file_length.clone() }
+        Self {
+            file: self.file.clone(),
+            pos: self.pos,
+            file_length: self.file_length,
+        }
     }
 }
 
 impl<R: Read + Seek + HasLength> CloneableSeekableReader<R> {
+    /// Constructor. Takes ownership of the underlying `Read`.
+    /// You should pass in only streams whose total length you expect
+    /// to be fixed and unchanging. Odd behavior may occur if the length
+    /// of the stream changes; any subsequent seeks will not take account
+    /// of the changed stream length.
     fn new(file: R) -> Self {
         Self {
             file: Arc::new(Mutex::new(file)),
@@ -59,6 +76,7 @@ impl<R: Read + Seek + HasLength> CloneableSeekableReader<R> {
         }
     }
 
+    /// Determine the length of the underlying stream.
     fn ascertain_file_length(&mut self) -> u64 {
         match self.file_length {
             Some(file_length) => file_length,
@@ -97,9 +115,7 @@ impl<R: Read + Seek + HasLength> Seek for CloneableSeekableReader<R> {
             }
             // TODO, once stabilised, use checked_add_signed
             SeekFrom::Current(offset_from_pos) => {
-                if offset_from_pos == 0 {
-                    self.pos
-                } else if offset_from_pos > 0 {
+                if offset_from_pos > 0 {
                     self.pos + (offset_from_pos as u64)
                 } else {
                     self.pos - ((-offset_from_pos) as u64)
@@ -123,11 +139,12 @@ impl HasLength for File {
     }
 }
 
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let zipfile = File::open(args.zipfile)?;
-    //let zipfile = BufReader::new(zipfile);
+    // The following line doesn't actually seem to make any significant
+    // performance difference.
+    // let zipfile = BufReader::new(zipfile);
     let zipfile = CloneableSeekableReader::new(zipfile);
     let zip = zip::ZipArchive::new(zipfile)?;
     let file_count = zip.len();
@@ -137,7 +154,7 @@ fn main() -> Result<()> {
         let mut file = myzip.by_index(i).expect("Unable to get file from zip");
         let name = file.name();
         println!("Filename: {}", name);
-        if name.ends_with("/") {
+        if name.ends_with('/') {
             println!("Skipping, directory");
         } else {
             let out_file = PathBuf::from(file.name());
