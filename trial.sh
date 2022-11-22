@@ -14,9 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ZIPFILE=~/Downloads/mac-release_asan-mac-release-1008971.zip
-MYDIR=$(pwd)
+# This is a noddy benchmark to compare regular unzip to ripunzip.
+# It may not be realistic.
 
+ZIPFILE="$1"
+MYDIR="$(pwd)"
+
+rm -Rf /tmp/testa
 mkdir /tmp/testa
 pushd /tmp/testa
 time sh -c "unzip $ZIPFILE > /dev/null"
@@ -24,9 +28,10 @@ popd
 
 rm -Rf /tmp/testa
 
+rm -Rf /tmp/testb
 mkdir /tmp/testb
 pushd /tmp/testb
-time sh -c "$MYDIR/target/release/runzip $ZIPFILE > /dev/null"
+time sh -c "$MYDIR/target/release/ripunzip $ZIPFILE > /dev/null"
 popd
 
 rm -Rf /tmp/testb
