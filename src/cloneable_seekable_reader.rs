@@ -124,6 +124,7 @@ impl HasLength for File {
     }
 }
 
+#[cfg(test)]
 mod test {
     use std::io::{Cursor, Read, Seek, SeekFrom};
 
