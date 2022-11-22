@@ -1,11 +1,11 @@
 use std::{
-    fs::File,
+    fs::{create_dir_all, File},
     io::SeekFrom,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Result};
+use anyhow::Result;
 use clap::Parser;
 use rayon::prelude::*;
 use std::io::prelude::*;
@@ -58,7 +58,7 @@ impl Read for CloneableFile {
         // seeks
         underlying_file.seek(SeekFrom::Start(self.pos))?;
         let read_result = underlying_file.read(buf);
-        if let Ok(bytes_read) =  read_result {
+        if let Ok(bytes_read) = read_result {
             // TODO, once stabilised, use checked_add_signed
             self.pos += bytes_read as u64;
         }
@@ -100,10 +100,22 @@ fn main() -> Result<()> {
     println!("Zip has {} files", file_count);
     (0..file_count).into_par_iter().for_each(|i| {
         let mut myzip = zip.clone();
-        let file = myzip.by_index(i).expect("Unable to get file from zip");
-        println!("Filename: {}", file.name());
-        //std::io::copy(&mut file, &mut std::io::stdout());
+        let mut file = myzip.by_index(i).expect("Unable to get file from zip");
+        let name = file.name();
+        println!("Filename: {}", name);
+        if name.ends_with("/") {
+            println!("Skipping, directory");
+        } else {
+            let out_file = PathBuf::from(file.name());
+            if let Some(parent) = out_file.parent() {
+                create_dir_all(parent).unwrap_or_else(|err| {
+                    panic!("Unable to create parent directories for {}: {}", name, err)
+                });
+            }
+            let mut out_file = File::create(out_file)
+                .unwrap();
+            std::io::copy(&mut file, &mut out_file).unwrap();
+        }
     });
-    println!("Hello, world!");
     Ok(())
 }
