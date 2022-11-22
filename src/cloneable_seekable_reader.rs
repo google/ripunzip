@@ -125,7 +125,7 @@ impl HasLength for File {
 }
 
 mod test {
-    use std::io::{Cursor, Read};
+    use std::io::{Cursor, Read, Seek, SeekFrom};
 
     use super::{CloneableSeekableReader, HasLength};
 
@@ -144,5 +144,18 @@ mod test {
         assert!(reader.read_exact(&mut out).is_ok());
         assert_eq!(out[0], 0);
         assert_eq!(out[1], 1);
+        assert!(reader.seek(SeekFrom::Start(0)).is_ok());
+        assert!(reader.read_exact(&mut out).is_ok());
+        assert_eq!(out[0], 0);
+        assert_eq!(out[1], 1);
+        assert!(reader.seek(SeekFrom::Current(0)).is_ok());
+        assert!(reader.read_exact(&mut out).is_ok());
+        assert_eq!(out[0], 2);
+        assert_eq!(out[1], 3);
+        assert!(reader.seek(SeekFrom::End(-2)).is_ok());
+        assert!(reader.read_exact(&mut out).is_ok());
+        assert_eq!(out[0], 8);
+        assert_eq!(out[1], 9);
+        assert!(reader.read_exact(&mut out).is_err());
     }
 }
