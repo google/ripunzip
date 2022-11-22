@@ -123,3 +123,26 @@ impl HasLength for File {
         self.metadata().unwrap().len()
     }
 }
+
+mod test {
+    use std::io::{Cursor, Read};
+
+    use super::{CloneableSeekableReader, HasLength};
+
+    impl HasLength for Cursor<Vec<u8>> {
+        fn len(&self) -> u64 {
+            self.get_ref().len() as u64
+        }
+    }
+
+    #[test]
+    fn test_cloneable_seekable_reader() {
+        let buf: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let buf = Cursor::new(buf);
+        let mut reader = CloneableSeekableReader::new(buf);
+        let mut out = vec![0; 2];
+        assert!(reader.read_exact(&mut out).is_ok());
+        assert_eq!(out[0], 0);
+        assert_eq!(out[1], 1);
+    }
+}
