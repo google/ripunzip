@@ -112,25 +112,22 @@ fn extract_file(
 
 /// Extracts a file from a zip file.
 fn extract_file_inner(mut file: ZipFile, output_directory: &Option<PathBuf>) -> Result<()> {
+    if file.is_dir() {
+        return Ok(());
+    }
     let name = file
         .enclosed_name()
         .ok_or_else(|| std::io::Error::new(ErrorKind::Unsupported, "path not safe to extract"))?;
     let name = name.to_path_buf();
-    // let name_for_error = name.clone();
-    // let add_context = || format!("Failed to extract {}", name_for_error);
-    if name.is_dir() {
-        println!("Skipping directory {}", name.display());
-    } else {
-        println!("Extracting: {}", name.display());
-        let out_file = match output_directory {
-            Some(output_directory) => output_directory.join(file.name()),
-            None => PathBuf::from(file.name()),
-        };
-        if let Some(parent) = out_file.parent() {
-            create_dir_all(parent)?;
-        }
-        let mut out_file = File::create(out_file)?;
-        std::io::copy(&mut file, &mut out_file)?;
+    println!("Extracting: {}", name.display());
+    let out_file = match output_directory {
+        Some(output_directory) => output_directory.join(file.name()),
+        None => PathBuf::from(file.name()),
+    };
+    if let Some(parent) = out_file.parent() {
+        create_dir_all(parent)?;
     }
+    let mut out_file = File::create(out_file)?;
+    std::io::copy(&mut file, &mut out_file)?;
     Ok(())
 }
