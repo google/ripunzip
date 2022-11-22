@@ -20,18 +20,21 @@
 ZIPFILE="$1"
 MYDIR="$(pwd)"
 
-rm -Rf /tmp/testa
-mkdir /tmp/testa
-pushd /tmp/testa
-time sh -c "unzip $ZIPFILE > /dev/null"
-popd
-
-rm -Rf /tmp/testa
+echo Ensure file cache is warmed up to contain zipfile
+cat $ZIPFILE > /dev/null
 
 rm -Rf /tmp/testb
 mkdir /tmp/testb
 pushd /tmp/testb
+echo ripunzip:
 time sh -c "$MYDIR/target/release/ripunzip $ZIPFILE > /dev/null"
 popd
-
 rm -Rf /tmp/testb
+
+rm -Rf /tmp/testa
+mkdir /tmp/testa
+pushd /tmp/testa
+echo unzip:
+time sh -c "unzip $ZIPFILE > /dev/null"
+popd
+rm -Rf /tmp/testa
