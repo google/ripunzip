@@ -16,7 +16,7 @@ mod cloneable_seekable_reader;
 
 use std::{
     borrow::Cow,
-    fs::{create_dir_all, File},
+    fs::{create_dir_all, File, Permissions},
     io::ErrorKind,
     path::{Path, PathBuf},
 };
@@ -101,15 +101,22 @@ fn extract_file_inner(mut file: ZipFile, output_directory: &Option<PathBuf>) -> 
         .ok_or_else(|| std::io::Error::new(ErrorKind::Unsupported, "path not safe to extract"))?;
     let name = name.to_path_buf();
     println!("Extracting: {}", name.display());
-    let out_file = match output_directory {
+    let out_path = match output_directory {
         Some(output_directory) => output_directory.join(file.name()),
         None => PathBuf::from(file.name()),
     };
-    if let Some(parent) = out_file.parent() {
+    if let Some(parent) = out_path.parent() {
         create_dir_all(parent)?;
     }
-    let mut out_file = File::create(out_file)?;
+    let mut out_file = File::create(&out_path)?;
     std::io::copy(&mut file, &mut out_file)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(mode) = file.unix_mode() {
+            std::fs::set_permissions(&out_path, Permissions::from_mode(mode))?;
+        }
+    }
     Ok(())
 }
 
