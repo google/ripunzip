@@ -131,3 +131,69 @@ fn extract_file_inner(mut file: ZipFile, output_directory: &Option<PathBuf>) -> 
     std::io::copy(&mut file, &mut out_file)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        env::{current_dir, set_current_dir},
+        fs::{read_to_string, File},
+        io::Write,
+        path::Path,
+    };
+
+    use tempfile::tempdir;
+    use zip::{write::FileOptions, ZipWriter};
+
+    use crate::unzip_file;
+
+    fn create_zip_file(path: &Path) {
+        let file = File::create(path).unwrap();
+        let mut zip = ZipWriter::new(file);
+
+        zip.add_directory("test/", Default::default()).unwrap();
+        let options = FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o755);
+        zip.start_file("test/a.txt", options).unwrap();
+        zip.write_all(b"Contents of A\n").unwrap();
+        zip.start_file("b.txt", options).unwrap();
+        zip.write_all(b"Contents of B\n").unwrap();
+        zip.start_file("test/c.txt", options).unwrap();
+        zip.write_all(b"Contents of C\n").unwrap();
+        zip.finish().unwrap();
+    }
+
+    fn check_files_exist(path: &Path) {
+        let a = path.join("test/a.txt");
+        let b = path.join("b.txt");
+        let c = path.join("test/c.txt");
+        assert_eq!(read_to_string(a).unwrap(), "Contents of A\n");
+        assert_eq!(read_to_string(b).unwrap(), "Contents of B\n");
+        assert_eq!(read_to_string(c).unwrap(), "Contents of C\n");
+    }
+
+    #[test]
+    #[ignore] // because the chdir changes global state
+    fn test_extract_no_path() {
+        let td = tempdir().unwrap();
+        let zf = td.path().join("z.zip");
+        create_zip_file(&zf);
+        let zf = File::open(zf).unwrap();
+        let old_dir = current_dir().unwrap();
+        set_current_dir(td.path()).unwrap();
+        unzip_file(zf, &None).unwrap();
+        set_current_dir(old_dir).unwrap();
+        check_files_exist(td.path());
+    }
+
+    #[test]
+    fn test_extract_with_path() {
+        let td = tempdir().unwrap();
+        let zf = td.path().join("z.zip");
+        create_zip_file(&zf);
+        let zf = File::open(zf).unwrap();
+        let outdir = td.path().join("outdir");
+        unzip_file(zf, &Some(outdir.clone())).unwrap();
+        check_files_exist(&outdir);
+    }
+}
