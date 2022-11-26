@@ -14,6 +14,7 @@
 
 mod unzip;
 
-pub use unzip::unzip_file;
-pub use unzip::unzip_uri;
+pub use unzip::NullProgressReporter;
+pub use unzip::UnzipEngine;
 pub use unzip::UnzipOptions;
+pub use unzip::UnzipProgressReporter;

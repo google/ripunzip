@@ -126,9 +126,9 @@ impl HasLength for File {
 
 #[cfg(test)]
 mod test {
-    use std::io::{Cursor, Read, Seek, SeekFrom};
-
     use super::{CloneableSeekableReader, HasLength};
+    use std::io::{Cursor, Read, Seek, SeekFrom};
+    use test_log::test;
 
     impl HasLength for Cursor<Vec<u8>> {
         fn len(&self) -> u64 {
