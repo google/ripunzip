@@ -426,30 +426,28 @@ impl SeekableHttpReaderEngine {
     /// any threads might be reading from any [`SeekableHttpReader`] created
     /// by this engine; that may panic.
     pub(crate) fn set_expected_access_pattern(&self, access_pattern: AccessPattern) {
-        {
-            let mut state = self.state.lock().unwrap();
-            let old_access_pattern = state.access_pattern;
-            if old_access_pattern == access_pattern {
-                return;
-            }
-            if matches!(access_pattern, AccessPattern::SequentialIsh) {
-                if state.read_in_progress {
-                    panic!("Must not call set_expected_access_pattern while a read is in progress");
-                }
-                // If we're switching to a sequential pattern, recreate
-                // the reader at position zero.
-                log::info!("create_reader_at_zero");
-                {
-                    let mut reading_materials = self.reader.lock().unwrap();
-                    let new_reader = reading_materials.range_fetcher.fetch_range(0);
-                    if let Ok(new_reader) = new_reader {
-                        reading_materials.reader = Some((BufReader::new(new_reader), 0));
-                    }
-                }
-                state.stats.num_http_streams += 1;
-            }
-            state.access_pattern = access_pattern;
+        let mut state = self.state.lock().unwrap();
+        let old_access_pattern = state.access_pattern;
+        if old_access_pattern == access_pattern {
+            return;
         }
+        if matches!(access_pattern, AccessPattern::SequentialIsh) {
+            if state.read_in_progress {
+                panic!("Must not call set_expected_access_pattern while a read is in progress");
+            }
+            // If we're switching to a sequential pattern, recreate
+            // the reader at position zero.
+            log::info!("create_reader_at_zero");
+            {
+                let mut reading_materials = self.reader.lock().unwrap();
+                let new_reader = reading_materials.range_fetcher.fetch_range(0);
+                if let Ok(new_reader) = new_reader {
+                    reading_materials.reader = Some((BufReader::new(new_reader), 0));
+                }
+            }
+            state.stats.num_http_streams += 1;
+        }
+        state.access_pattern = access_pattern;
     }
 
     /// Return some statistics about the success (or otherwise) of this stream.
