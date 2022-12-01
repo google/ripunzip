@@ -554,7 +554,7 @@ mod tests {
 
         server.expect(
             Expectation::matching(request::method_path("GET", "/foo"))
-                .times(2)
+                .times(..)
                 .respond_with(
                     status_code(200)
                         .insert_header("Accept-Ranges", "bytes")
@@ -576,12 +576,14 @@ mod tests {
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "4567");
 
         server.expect(
-            Expectation::matching(request::method_path("GET", "/foo")).respond_with(
-                status_code(200)
-                    .insert_header("Accept-Ranges", "bytes")
-                    .insert_header("Content-Length", "8")
-                    .body("456789AB"),
-            ),
+            Expectation::matching(request::method_path("GET", "/foo"))
+                .times(..)
+                .respond_with(
+                    status_code(200)
+                        .insert_header("Accept-Ranges", "bytes")
+                        .insert_header("Content-Length", "8")
+                        .body("456789AB"),
+                ),
         );
 
         seekable_http_reader.seek(SeekFrom::Start(4)).unwrap();
