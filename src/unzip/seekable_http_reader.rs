@@ -110,16 +110,19 @@ impl State {
         }
     }
 
-    /// Read from the readahead cache, if we can. We assume that all data
+    /// Read from the readahead cache, if we can.
+    /// If '`discard_read_data` is true, we assume that all data
     /// will be consumed exactly once, so we discard the data that has been read.
     /// Sometimes we'll have blocks of data where we only want to read part of it,
     /// so then we will split the block and merely retain the bits that are
     /// not yet read by the readers.
     fn read_from_cache(&mut self, pos: u64, buf: &mut [u8]) -> Option<usize> {
+        let discard_read_data = matches!(self.access_pattern, AccessPattern::SequentialIsh);
         log::info!(
-            "Check cache - pos required is 0x{:x}, cache contains {}",
+            "Check cache - pos required is 0x{:x}, cache contains {}, will discard data {}",
             pos,
-            self.describe_cache()
+            self.describe_cache(),
+            discard_read_data
         );
         let mut hit_found = None;
         for (possible_block_start, block) in
@@ -146,21 +149,23 @@ impl State {
             let block_offset = pos as usize - possible_block_start as usize;
             let to_read = min(buf.len(), block_len - block_offset);
             buf[..to_read].copy_from_slice(&block[block_offset..to_read + block_offset]);
-            // Now update the cache to remove the area we've just read
-            // Create new block(s) for the areas we haven't yet read
-            if block_offset > 0 {
-                let block_before = block[..block_offset].to_vec();
-                self.cache.insert(possible_block_start, block_before);
-            }
-            if to_read + block_offset < block.len() {
-                let block_after = block[to_read + block_offset..].to_vec();
-                self.cache.insert(
-                    possible_block_start + block_offset as u64 + to_read as u64,
-                    block_after,
-                );
-            }
-            self.current_size -= to_read;
             self.stats.cache_hits += 1;
+            if discard_read_data {
+                // Now update the cache to remove the area we've just read
+                // Create new block(s) for the areas we haven't yet read
+                if block_offset > 0 {
+                    let block_before = block[..block_offset].to_vec();
+                    self.cache.insert(possible_block_start, block_before);
+                }
+                if to_read + block_offset < block.len() {
+                    let block_after = block[to_read + block_offset..].to_vec();
+                    self.cache.insert(
+                        possible_block_start + block_offset as u64 + to_read as u64,
+                        block_after,
+                    );
+                }
+                self.current_size -= to_read;
+            }
 
             log::info!(
                 "Cache hit at 0x{:x} - after split cache contains {}",
@@ -382,13 +387,23 @@ impl SeekableHttpReaderEngine {
             }
             *reader_pos += to_read as u64;
         }
+        // Do the actual read for the data that this thread wants,
+        // and has been waiting so patiently for.
         let bytes_read = reader.read(buf)?;
+        let old_reader_pos = *reader_pos;
         *reader_pos += bytes_read as u64;
         log::info!("Read: have read 0x{:x} bytes", bytes_read);
 
         //     claim STATE mutex
         {
             let mut state = self.state.lock().unwrap();
+            if matches!(state.access_pattern, AccessPattern::RandomAccess) {
+                // If we're in a random access seek mode, we expect
+                // repeated reads to this same location may happen, so
+                // store this data for subsequent re-retrieveal such that
+                // we don't have to make a whole new HTTP request for it later.
+                state.insert(old_reader_pos, buf.to_vec());
+            }
             if reader_created {
                 state.stats.num_http_streams += 1;
             }
