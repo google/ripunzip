@@ -24,6 +24,23 @@ use super::{
 
 const MAX_BLOCK: usize = 4096;
 
+/// A hint to the [`SeekableHttpReaderEngine`] about the expected access pattern.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum AccessPattern {
+    /// We expect accesses all over the file.
+    RandomAccess,
+    /// We expect accesses starting from the beginning and moving to the end,
+    /// though there might be some jumping around if multiple threads are
+    /// reading from roughly the same area of the file.
+    SequentialIsh,
+}
+
+impl Default for AccessPattern {
+    fn default() -> Self {
+        Self::RandomAccess
+    }
+}
+
 /// Errors that may be returned by a [`SeekableHttpReaderEngine` or `SeekableHttpReader`].
 #[derive(Error, Debug)]
 pub(crate) enum Error {
@@ -39,6 +56,8 @@ pub(crate) enum Error {
 /// because access is protected by a mutex.
 #[derive(Default)]
 struct State {
+    /// The expected pattern of seeks and reads; a hint from the user.
+    access_pattern: AccessPattern,
     /// Maximum size of the "cache"
     readahead_limit: Option<usize>,
     /// Current size of the cache
@@ -60,9 +79,10 @@ struct State {
 }
 
 impl State {
-    fn new(readahead_limit: Option<usize>) -> Self {
+    fn new(readahead_limit: Option<usize>, access_pattern: AccessPattern) -> Self {
         Self {
             readahead_limit,
+            access_pattern,
             ..Default::default()
         }
     }
@@ -213,7 +233,11 @@ pub(crate) struct SeekableHttpReaderStatistics {
 impl SeekableHttpReaderEngine {
     /// Create a new seekable HTTP reader engine for this URI.
     /// This method will fail
-    pub(crate) fn new(uri: String, readahead_limit: Option<usize>) -> Result<Arc<Self>, Error> {
+    pub(crate) fn new(
+        uri: String,
+        readahead_limit: Option<usize>,
+        access_pattern: AccessPattern,
+    ) -> Result<Arc<Self>, Error> {
         let range_fetcher = RangeFetcher::new(uri).map_err(Error::RangeFetcherError)?;
         if !range_fetcher.accepts_ranges() {
             return Err(Error::AcceptRangesNotSupported);
@@ -225,7 +249,7 @@ impl SeekableHttpReaderEngine {
                 range_fetcher,
                 reader: None,
             }),
-            state: Mutex::new(State::new(readahead_limit)),
+            state: Mutex::new(State::new(readahead_limit, access_pattern)),
             read_completed: Condvar::new(),
         }))
     }
@@ -383,21 +407,34 @@ impl SeekableHttpReaderEngine {
         self.len
     }
 
-    /// Force rewind to point zero. This is sometimes useful if we know
-    /// we're going to be doing a _mostly_ sequential read from this point on...
-    /// it ensures that all the data from point zero onwards is stored in
-    /// the readahead cache, and avoids recreating potentially several
-    /// underlying HTTP streams to seek around near the beginning of the resource.
-    pub(crate) fn create_reader_at_zero(&self) {
-        log::info!("create_reader_at_zero");
+    /// Update the expected access pattern. You must not call this when
+    /// any threads might be reading from any [`SeekableHttpReader`] created
+    /// by this engine; that may panic.
+    pub(crate) fn set_expected_access_pattern(&self, access_pattern: AccessPattern) {
         {
-            let mut reading_materials = self.reader.lock().unwrap();
-            let new_reader = reading_materials.range_fetcher.fetch_range(0);
-            if let Ok(new_reader) = new_reader {
-                reading_materials.reader = Some((BufReader::new(new_reader), 0));
+            let mut state = self.state.lock().unwrap();
+            let old_access_pattern = state.access_pattern;
+            if old_access_pattern == access_pattern {
+                return;
             }
+            if matches!(access_pattern, AccessPattern::SequentialIsh) {
+                if state.read_in_progress {
+                    panic!("Must not call set_expected_access_pattern while a read is in progress");
+                }
+                // If we're switching to a sequential pattern, recreate
+                // the reader at position zero.
+                log::info!("create_reader_at_zero");
+                {
+                    let mut reading_materials = self.reader.lock().unwrap();
+                    let new_reader = reading_materials.range_fetcher.fetch_range(0);
+                    if let Ok(new_reader) = new_reader {
+                        reading_materials.reader = Some((BufReader::new(new_reader), 0));
+                    }
+                }
+                state.stats.num_http_streams += 1;
+            }
+            state.access_pattern = access_pattern;
         }
-        self.state.lock().unwrap().stats.num_http_streams += 1;
     }
 
     /// Return some statistics about the success (or otherwise) of this stream.
@@ -459,24 +496,30 @@ mod tests {
 
     use httptest::{matchers::*, responders::*, Expectation, Server};
 
-    use super::SeekableHttpReaderEngine;
+    use super::{AccessPattern, SeekableHttpReaderEngine};
 
     #[test]
     fn test_unlimited_readahead() {
-        do_test(None)
+        do_test(None, AccessPattern::SequentialIsh)
     }
 
     #[test]
     fn test_big_readahead() {
         const ONE_HUNDRED_MB: usize = 1024usize * 1024usize * 100usize;
-        do_test(Some(ONE_HUNDRED_MB))
+        do_test(Some(ONE_HUNDRED_MB), AccessPattern::SequentialIsh)
     }
 
     #[test]
     fn test_small_readahead() {
-        do_test(Some(4))
+        do_test(Some(4), AccessPattern::SequentialIsh)
     }
-    fn do_test(readahead_limit: Option<usize>) {
+
+    #[test]
+    fn test_random_access() {
+        do_test(None, AccessPattern::RandomAccess)
+    }
+
+    fn do_test(readahead_limit: Option<usize>, access_pattern: AccessPattern) {
         let server = Server::run();
         server.expect(
             Expectation::matching(request::method_path("HEAD", "/foo")).respond_with(
@@ -487,10 +530,13 @@ mod tests {
             ),
         );
 
-        let mut seekable_http_reader =
-            SeekableHttpReaderEngine::new(server.url("/foo").to_string(), readahead_limit)
-                .unwrap()
-                .create_reader();
+        let mut seekable_http_reader = SeekableHttpReaderEngine::new(
+            server.url("/foo").to_string(),
+            readahead_limit,
+            access_pattern,
+        )
+        .unwrap()
+        .create_reader();
         let mut throwaway = [0u8; 4];
 
         server.expect(

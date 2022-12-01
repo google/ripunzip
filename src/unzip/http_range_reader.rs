@@ -15,15 +15,15 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error("Initial HTTP HEAD command failed")]
-    HttpHeadError(#[source] reqwest::Error),
+    HttpHead(#[source] reqwest::Error),
     #[error("HTTP server did not specify a Content-Length header")]
     NoContentLength,
     #[error("HTTP resource was zero length")]
     EmptyContentLength,
     #[error("HTTP GET command failed")]
-    HttpGetError(#[source] reqwest::Error),
+    HttpGet(#[source] reqwest::Error),
     #[error("Reading while fast-forwarding to desired location failed")]
-    FastForwardError(#[source] std::io::Error),
+    FastForward(#[source] std::io::Error),
 }
 
 /// An object which can fetch different ranges of a URI, using the HTTP
@@ -42,7 +42,7 @@ impl RangeFetcher {
     /// Create a new range fetcher for a given resource.
     pub(crate) fn new(uri: String) -> Result<Self, Error> {
         let client = reqwest::blocking::Client::new();
-        let response = client.head(&uri).send().map_err(Error::HttpHeadError)?;
+        let response = client.head(&uri).send().map_err(Error::HttpHead)?;
         let content_length = content_length_via_headers(&response).ok_or(Error::NoContentLength)?;
         if content_length == 0 {
             return Err(Error::EmptyContentLength);
@@ -85,7 +85,7 @@ impl RangeFetcher {
             let range_header = format!("bytes={}-{}", offset, self.len());
             builder = builder.header(reqwest::header::RANGE, range_header);
         }
-        let mut response = builder.send().map_err(Error::HttpGetError)?;
+        let mut response = builder.send().map_err(Error::HttpGet)?;
         if !self.accept_ranges && offset > 0 {
             // Read and discard data prior to 'offset'
             let mut to_read = offset as usize;
@@ -93,7 +93,7 @@ impl RangeFetcher {
             while to_read > 0 {
                 let bytes_read = response
                     .read(&mut throwaway[0..min(4096usize, to_read)])
-                    .map_err(Error::FastForwardError)?;
+                    .map_err(Error::FastForward)?;
                 to_read -= bytes_read;
             }
         }

@@ -28,7 +28,7 @@ use crate::unzip::cloneable_seekable_reader::CloneableSeekableReader;
 
 use self::{
     cloneable_seekable_reader::HasLength,
-    seekable_http_reader::{SeekableHttpReader, SeekableHttpReaderEngine},
+    seekable_http_reader::{AccessPattern, SeekableHttpReader, SeekableHttpReaderEngine},
 };
 
 /// Options for unzipping.
@@ -144,7 +144,8 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
         output_directory: &Option<PathBuf>,
         progress_reporter: &(dyn UnzipProgressReporter + Sync),
     ) -> Vec<anyhow::Error> {
-        self.0.create_reader_at_zero();
+        self.0
+            .set_expected_access_pattern(AccessPattern::SequentialIsh);
         let result = if single_threaded {
             (0..self.len())
                 .into_iter()
@@ -198,7 +199,11 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
         progress_reporter: P,
         callback_on_rewind: F,
     ) -> Result<Self> {
-        let seekable_http_reader = SeekableHttpReaderEngine::new(uri.to_string(), readahead_limit);
+        let seekable_http_reader = SeekableHttpReaderEngine::new(
+            uri.to_string(),
+            readahead_limit,
+            AccessPattern::RandomAccess,
+        );
         let (compressed_length, zipfile): (u64, Box<dyn UnzipEngineImpl>) =
             match seekable_http_reader {
                 Ok(seekable_http_reader) => (
