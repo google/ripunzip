@@ -7,9 +7,10 @@
 // except according to those terms.
 
 use std::{
-    cmp::min,
+    cmp::{max, min},
     collections::BTreeMap,
     io::{BufReader, ErrorKind, Read, Seek, SeekFrom},
+    num::{NonZeroU64, NonZeroUsize},
     sync::{Arc, Condvar, Mutex},
 };
 
@@ -20,19 +21,6 @@ use super::{
     cloneable_seekable_reader::HasLength,
     http_range_reader::{self, RangeFetcher},
 };
-
-/// This is how much we read from the underlying HTTP stream in a given thread,
-/// before signalling other threads that they may wish to continue with their
-/// CPU-bound unzipping. Empirically determined.
-/// 128KB = 172ms
-/// 512KB = 187ms
-/// 1024KB = 152ms
-/// 2048KB = 170ms
-/// If we set this too high, we starve multiple threads - they can't start
-/// acting on the data to unzip their files until the read is complete. If we
-/// set this too low, the cache structure (a `BTreeMap`) becomes dominant in
-/// CPU usage.
-const MAX_BLOCK: usize = 1024 * 1024;
 
 /// A hint to the [`SeekableHttpReaderEngine`] about the expected access pattern.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -88,12 +76,14 @@ impl CacheCell {
 
 /// Internal state of the [`SeekableHttpReaderEngine`], in a separate struct
 /// because access is protected by a mutex.
-#[derive(Default)]
 struct State {
     /// The expected pattern of seeks and reads; a hint from the user.
     access_pattern: AccessPattern,
     /// Maximum size of the "cache"
     readahead_limit: Option<usize>,
+    /// The block size we read each time we do a read from the underlying
+    /// stream.
+    max_block: NonZeroUsize,
     /// Current size of the cache
     current_size: usize,
     /// The readahead "cache", which is not really a cache in the strict sense,
@@ -105,26 +95,36 @@ struct State {
     /// we skipped over, in order to service any subsequent requests for those
     /// positions.
     cache: BTreeMap<u64, CacheCell>,
-    /// Whether a read from the underlying HTTP stream is afoot. Only one thread
-    /// can be doing a read at a time.
-    read_in_progress: bool,
+    /// Whether a read from the underlying HTTP stream is afoot on each of the
+    /// read streams. Only one thread can be doing a read at a time on each
+    /// stream.
+    read_in_progress: Vec<bool>,
     /// Some statistics about how we're doing.
     stats: SeekableHttpReaderStatistics,
 }
 
 impl State {
-    fn new(readahead_limit: Option<usize>, access_pattern: AccessPattern) -> Self {
+    fn new(
+        readahead_limit: Option<usize>,
+        access_pattern: AccessPattern,
+        parallel_readers: usize,
+        max_block: NonZeroUsize,
+    ) -> Self {
         // Grow the readahead limit if it's less than block size, because we
         // must always store one block in order to service the most recent read.
         let readahead_limit = match readahead_limit {
-            Some(readahead_limit) if readahead_limit > MAX_BLOCK => Some(readahead_limit),
-            Some(_) => Some(MAX_BLOCK),
+            Some(readahead_limit) if readahead_limit > max_block.get() => Some(readahead_limit),
+            Some(_) => Some(max_block.get()),
             _ => None,
         };
         Self {
             readahead_limit,
             access_pattern,
-            ..Default::default()
+            max_block,
+            read_in_progress: vec![false; parallel_readers],
+            cache: BTreeMap::new(),
+            stats: SeekableHttpReaderStatistics::default(),
+            current_size: 0,
         }
     }
 
@@ -161,8 +161,9 @@ impl State {
         let discard_read_data = matches!(self.access_pattern, AccessPattern::SequentialIsh);
         let mut block_to_discard = None;
         let mut return_value = None;
-        for (possible_block_start, block) in
-            self.cache.range_mut(pos - min(pos, MAX_BLOCK as u64)..=pos)
+        for (possible_block_start, block) in self
+            .cache
+            .range_mut(pos - min(pos, self.max_block.get() as u64)..=pos)
         {
             let block_offset = pos as usize - *possible_block_start as usize;
             let block_len = block.len();
@@ -207,8 +208,8 @@ impl std::fmt::Debug for State {
 /// Items related to reading from the underlying HTTP streams. This is
 /// in a separate struct because it's protected by a mutex.
 struct ReadingMaterials {
-    range_fetcher: RangeFetcher,
-    reader: Option<(BufReader<Response>, u64)>, // second item in tuple is current reader pos
+    reader: BufReader<Response>,
+    reader_pos: u64,
 }
 
 /// A type which can produce objects that can be [`Read`] and [`Seek`] even
@@ -220,8 +221,13 @@ struct ReadingMaterials {
 pub(crate) struct SeekableHttpReaderEngine {
     /// Total stream length
     len: u64,
-    /// Facilities to read from the underlying HTTP stream(s)
-    reader: Mutex<ReadingMaterials>,
+    /// The object which can create streams to fetch HTTP ranges.
+    range_fetcher: Mutex<RangeFetcher>,
+    /// Facilities to read from the underlying HTTP stream(s).
+    /// Items may only be added to or removed from this vec while the State
+    /// mutex is held. However the items within the vec can be used even
+    /// without the state mutex held.
+    readers: Vec<Mutex<Option<ReadingMaterials>>>,
     /// Overall state of this object, mostly related to the readahead cache
     /// of blocks we already read, but also with the all-important boolean
     /// stating whether any thread is already reading on the underlying stream.
@@ -230,6 +236,8 @@ pub(crate) struct SeekableHttpReaderEngine {
     /// readahead cache and all other threads should consider if their read
     /// request can be serviced.
     read_completed: Condvar,
+    /// Maximum read block size.
+    max_block: NonZeroUsize,
 }
 
 /// Some results about the success (or otherwise) of this reader.
@@ -254,21 +262,40 @@ impl SeekableHttpReaderEngine {
     pub(crate) fn new(
         uri: String,
         readahead_limit: Option<usize>,
+        parallelism_limit: Option<NonZeroUsize>,
         access_pattern: AccessPattern,
+        max_block: NonZeroUsize,
+        range_per_reader: NonZeroU64,
     ) -> Result<Arc<Self>, Error> {
         let range_fetcher = RangeFetcher::new(uri).map_err(Error::RangeFetcherError)?;
         if !range_fetcher.accepts_ranges() {
             return Err(Error::AcceptRangesNotSupported);
         }
         let len = range_fetcher.len();
+        // Calculate how many HTTP streams we want going at once, if and when
+        // we get to AccessPattern::SequentialIsh.
+        let mut parallel_readers = (len / range_per_reader) as usize;
+        if let Some(parallelism_limit) = parallelism_limit {
+            parallel_readers = min(parallel_readers, parallelism_limit.get());
+        }
+        parallel_readers = max(1, parallel_readers);
+        println!("Parallel readers: {}", parallel_readers);
+        let mut readers = Vec::with_capacity(parallel_readers);
+        for _ in 0..parallel_readers {
+            readers.push(Mutex::new(None));
+        }
         Ok(Arc::new(Self {
             len,
-            reader: Mutex::new(ReadingMaterials {
-                range_fetcher,
-                reader: None,
-            }),
-            state: Mutex::new(State::new(readahead_limit, access_pattern)),
+            range_fetcher: Mutex::new(range_fetcher),
+            readers,
+            state: Mutex::new(State::new(
+                readahead_limit,
+                access_pattern,
+                parallel_readers,
+                max_block,
+            )),
             read_completed: Condvar::new(),
+            max_block,
         }))
     }
 
@@ -334,8 +361,12 @@ impl SeekableHttpReaderEngine {
         if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
             return Ok(bytes_read_from_cache);
         }
+        // - If no, we will consider doing an actual read.
+        //   Work out which reader is relevant to our pos
+        let currently_relevant_reader = self.calculate_relevant_reader(&state, pos);
+        let end_of_reader_range = self.end_of_reader_range(&state, currently_relevant_reader);
         // - If no, check if read in progress
-        let mut read_in_progress = state.read_in_progress;
+        let mut read_in_progress = state.read_in_progress[currently_relevant_reader];
         //   Is there read in progress?
         while read_in_progress {
             //   - If yes, release CACHE mutex, WAIT on condvar atomically
@@ -344,59 +375,67 @@ impl SeekableHttpReaderEngine {
             if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
                 return Ok(bytes_read_from_cache);
             }
-            read_in_progress = state.read_in_progress;
+            read_in_progress = state.read_in_progress[currently_relevant_reader];
         }
         state.stats.cache_misses += 1;
         //   - If no:
+        //     we're actually likely to do a read.
         //     set read in progress
-        state.read_in_progress = true;
+        state.read_in_progress[currently_relevant_reader] = true;
         //     claim READER mutex
-        let mut reading_stuff = self.reader.lock().unwrap();
+        let mut reading_stuff = self.readers[currently_relevant_reader].lock().unwrap();
         //     release STATE mutex
         drop(state);
         //     perform read
         // First check if we need to rewind.
-        if let Some((_, readerpos)) = reading_stuff.reader.as_ref() {
-            if pos < *readerpos {
+        if let Some(reading_materials_inner) = reading_stuff.as_mut() {
+            if pos < reading_materials_inner.reader_pos {
                 log::info!(
                     "New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
                     pos,
-                    *readerpos
+                    reading_materials_inner.reader_pos
                 );
-                reading_stuff.reader = None;
+                *reading_stuff = None;
             }
         }
         let mut reader_created = false;
-        if reading_stuff.reader.is_none() {
+        if reading_stuff.is_none() {
             log::info!("create_reader");
-            reading_stuff.reader = Some((
-                BufReader::new(
-                    reading_stuff
-                        .range_fetcher
-                        .fetch_range(pos)
+            *reading_stuff = Some(ReadingMaterials {
+                reader: BufReader::new(
+                    self.range_fetcher
+                        .lock()
+                        .unwrap()
+                        .fetch_range(pos..end_of_reader_range)
                         .map_err(|e| std::io::Error::new(ErrorKind::Unsupported, e.to_string()))?,
                 ),
-                pos,
-            ));
+                reader_pos: pos,
+            });
             reader_created = true;
         };
 
-        let (reader, reader_pos) = reading_stuff.reader.as_mut().unwrap();
-        if pos > *reader_pos {
-            log::info!("Read: fast-forward from 0x{:x} to 0x{:x}", *reader_pos, pos);
+        let reading_stuff = reading_stuff.as_mut().unwrap();
+        if pos > reading_stuff.reader_pos {
+            log::info!(
+                "Read: fast-forward from 0x{:x} to 0x{:x}",
+                reading_stuff.reader_pos,
+                pos
+            );
         }
-        while pos >= *reader_pos {
+        while pos >= reading_stuff.reader_pos {
             // Fast forward beyond the desired position, recording any reads in the cache
             // for later.
-            let to_read = min(MAX_BLOCK, self.len as usize - *reader_pos as usize);
+            let to_read = min(
+                self.max_block.get(),
+                self.len as usize - reading_stuff.reader_pos as usize,
+            );
             let mut new_block = vec![0u8; to_read];
-            reader.read_exact(&mut new_block)?;
+            reading_stuff.reader.read_exact(&mut new_block)?;
             //     claim STATE mutex
             let mut state = self.state.lock().unwrap();
-            state.insert(*reader_pos, new_block);
-            // Tell any waiting threads they should re-check the cache
+            state.insert(reading_stuff.reader_pos, new_block);
             self.read_completed.notify_all();
-            *reader_pos += to_read as u64;
+            reading_stuff.reader_pos += to_read as u64;
         }
         // Because the above condition is >=, and because we know the request was not
         // to read at the very end of the file, we know we now have some data in the
@@ -410,7 +449,7 @@ impl SeekableHttpReaderEngine {
             state.stats.num_http_streams += 1;
         }
         //     set read not in progress
-        state.read_in_progress = false;
+        state.read_in_progress[currently_relevant_reader] = false;
         //     release STATE mutex
         //     release READER mutex
         Ok(bytes_read)
@@ -435,17 +474,25 @@ impl SeekableHttpReaderEngine {
             state.stats
         );
         if matches!(access_pattern, AccessPattern::SequentialIsh) {
-            if state.read_in_progress {
+            if state.read_in_progress.iter().any(|b| *b) {
                 panic!("Must not call set_expected_access_pattern while a read is in progress");
             }
-            // If we're switching to a sequential pattern, recreate
-            // the reader at position zero.
-            log::info!("create_reader_at_zero");
+            // If we're switching to a sequential pattern, recreate all our
+            // readers at the start of their respective ranges.
+            log::info!("creating sequential readers at the starts of ranges");
             {
-                let mut reading_materials = self.reader.lock().unwrap();
-                let new_reader = reading_materials.range_fetcher.fetch_range(0);
-                if let Ok(new_reader) = new_reader {
-                    reading_materials.reader = Some((BufReader::new(new_reader), 0));
+                for reader_num in 0..self.readers.len() {
+                    let mut reading_materials = self.readers[reader_num].lock().unwrap();
+                    let start_of_reader_range = self.start_of_reader_range(&state, reader_num);
+                    let reader_range =
+                        start_of_reader_range..self.end_of_reader_range(&state, reader_num);
+                    let new_reader = self.range_fetcher.lock().unwrap().fetch_range(reader_range);
+                    if let Ok(new_reader) = new_reader {
+                        *reading_materials = Some(ReadingMaterials {
+                            reader: BufReader::new(new_reader),
+                            reader_pos: start_of_reader_range,
+                        });
+                    }
                 }
             }
             state.stats.num_http_streams += 1;
@@ -456,6 +503,45 @@ impl SeekableHttpReaderEngine {
     /// Return some statistics about the success (or otherwise) of this stream.
     pub(crate) fn get_stats(&self) -> SeekableHttpReaderStatistics {
         self.state.lock().unwrap().stats.clone()
+    }
+
+    /// Determine which of the many underlying readers is the right one
+    /// for an upcoming read.
+    fn calculate_relevant_reader(&self, state: &State, pos: u64) -> usize {
+        match state.access_pattern {
+            AccessPattern::RandomAccess => 0usize, // always use a single reader
+            AccessPattern::SequentialIsh => {
+                let num_readers = self.readers.len();
+                let range_covered_by_each_reader = self.len / num_readers as u64;
+                min((pos / range_covered_by_each_reader) as usize, num_readers)
+            }
+        }
+    }
+
+    fn start_of_reader_range(&self, state: &State, reader: usize) -> u64 {
+        match state.access_pattern {
+            AccessPattern::RandomAccess => 0u64,
+            AccessPattern::SequentialIsh => {
+                let num_readers = self.readers.len();
+                let range_covered_by_each_reader = self.len / num_readers as u64;
+                reader as u64 * range_covered_by_each_reader
+            }
+        }
+    }
+
+    fn end_of_reader_range(&self, state: &State, reader: usize) -> u64 {
+        match state.access_pattern {
+            AccessPattern::RandomAccess => self.len(),
+            AccessPattern::SequentialIsh => {
+                let num_readers = self.readers.len();
+                let range_covered_by_each_reader = self.len / num_readers as u64;
+                if reader == num_readers - 1 {
+                    self.len()
+                } else {
+                    (reader + 1) as u64 * range_covered_by_each_reader
+                }
+            }
+        }
     }
 }
 
@@ -515,7 +601,10 @@ impl HasLength for SeekableHttpReader {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Seek, SeekFrom};
+    use std::{
+        io::{Read, Seek, SeekFrom},
+        num::{NonZeroU64, NonZeroUsize},
+    };
     use test_log::test;
 
     use httptest::{matchers::*, responders::*, Expectation, Server};
@@ -557,7 +646,10 @@ mod tests {
         let mut seekable_http_reader = SeekableHttpReaderEngine::new(
             server.url("/foo").to_string(),
             readahead_limit,
+            None,
             access_pattern,
+            NonZeroUsize::new(4096).unwrap(),
+            NonZeroU64::new(10 * 1024 * 1024).unwrap(),
         )
         .unwrap()
         .create_reader();

@@ -12,3 +12,4 @@ pub use unzip::NullProgressReporter;
 pub use unzip::UnzipEngine;
 pub use unzip::UnzipOptions;
 pub use unzip::UnzipProgressReporter;
+pub use unzip::UnzipUriOptions;

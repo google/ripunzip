@@ -16,11 +16,11 @@ use httptest::Server;
 use libfuzzer_sys::arbitrary;
 use libfuzzer_sys::fuzz_target;
 use std::collections::{HashMap, HashSet};
+use ripunzip::UnzipUriOptions;
 use std::fs::File;
 use std::io::Cursor;
 use std::io::Write;
 use std::path::Path;
-use itertools::Itertools;
 
 /// Segments of the filename of each zip member. We don't allow
 /// totally arbitrary filenames, because that tends to throw up permissions
@@ -63,6 +63,7 @@ enum Method {
     Uri {
         readahead_limit: Option<usize>,
         server_type: ripunzip_test_utils::ServerType,
+        uri_options: UnzipUriOptions,
     },
 }
 
@@ -98,8 +99,8 @@ fuzz_target!(|input: Inputs| {
             ripunzip.unzip()
         }
         Method::Uri {
-            readahead_limit,
             server_type,
+            uri_options,
         } => {
             let server = Server::run();
             ripunzip_test_utils::set_up_server(&server, zip_data, server_type);
@@ -107,7 +108,7 @@ fuzz_target!(|input: Inputs| {
             let ripunzip = ripunzip::UnzipEngine::for_uri(
                 uri,
                 options,
-                readahead_limit,
+                uri_options,
                 progress_reporter,
                 || {},
             )?;
@@ -141,7 +142,11 @@ fn recursive_lsdir(dir: &Path) -> HashSet<std::path::PathBuf> {
         .collect()
 }
 
-fn create_zip(output: &mut Vec<u8>, zip_members: &HashMap<ZipMemberFilename, Vec<u8>>, compression_method: CompressionMethod) {
+fn create_zip(
+    output: &mut Vec<u8>,
+    zip_members: &HashMap<ZipMemberFilename, Vec<u8>>,
+    compression_method: CompressionMethod,
+) {
     let compression_method = match compression_method {
         CompressionMethod::Stored => zip::CompressionMethod::Stored,
         CompressionMethod::Deflated => zip::CompressionMethod::Deflated,
@@ -149,8 +154,7 @@ fn create_zip(output: &mut Vec<u8>, zip_members: &HashMap<ZipMemberFilename, Vec
         CompressionMethod::Zstd => zip::CompressionMethod::Zstd,
     };
     let mut zip = zip::ZipWriter::new(Cursor::new(output));
-    let options =
-        zip::write::FileOptions::default().compression_method(compression_method);
+    let options = zip::write::FileOptions::default().compression_method(compression_method);
     for (name, data) in zip_members.into_iter() {
         zip.start_file(name, options).unwrap();
         zip.write(&data).unwrap();

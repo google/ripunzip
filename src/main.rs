@@ -6,12 +6,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{fmt::Write, fs::File, path::PathBuf};
+use std::{fmt::Write, fs::File, num::NonZeroUsize, path::PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use ripunzip::{UnzipEngine, UnzipOptions, UnzipProgressReporter};
+use ripunzip::{UnzipEngine, UnzipOptions, UnzipProgressReporter, UnzipUriOptions};
 
 /// Unzip all files within a zip file as quickly as possible.
 #[derive(Parser, Debug)]
@@ -51,6 +51,11 @@ enum Commands {
         /// problem, but may make transfers much less efficient by requiring multiple HTTP streams.
         #[arg(long, value_name = "BYTES")]
         readahead_limit: Option<usize>,
+
+        /// Whether to create just a single HTTP stream for the main part of the download.
+        /// If false, multiple HTTP streams may be created to download in parallel.
+        #[arg(long)]
+        single_stream: bool,
     },
 }
 
@@ -69,14 +74,26 @@ fn main() -> Result<()> {
         Commands::Uri {
             uri,
             readahead_limit,
-        } => UnzipEngine::for_uri(
-            uri,
-            options,
-            *readahead_limit,
-            ProgressDisplayer::new(),
-            report_on_insufficient_readahead_size,
-        )?
-        .unzip(),
+            single_stream,
+        } => {
+            let unzip_uri_options = UnzipUriOptions {
+                readahead_limit: *readahead_limit,
+                maximum_streams: if *single_stream {
+                    Some(NonZeroUsize::new(1).unwrap())
+                } else {
+                    None
+                },
+                ..Default::default()
+            };
+            UnzipEngine::for_uri(
+                uri,
+                options,
+                unzip_uri_options,
+                ProgressDisplayer::new(),
+                report_on_insufficient_readahead_size,
+            )?
+            .unzip()
+        }
     }
 }
 
