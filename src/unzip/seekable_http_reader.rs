@@ -400,7 +400,7 @@ impl SeekableHttpReaderEngine {
             if matches!(state.access_pattern, AccessPattern::RandomAccess) {
                 // If we're in a random access seek mode, we expect
                 // repeated reads to this same location may happen, so
-                // store this data for subsequent re-retrieveal such that
+                // store this data for subsequent re-retrieval such that
                 // we don't have to make a whole new HTTP request for it later.
                 state.insert(old_reader_pos, buf.to_vec());
             }
