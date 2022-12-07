@@ -402,7 +402,9 @@ impl SeekableHttpReaderEngine {
                 // repeated reads to this same location may happen, so
                 // store this data for subsequent re-retrieval such that
                 // we don't have to make a whole new HTTP request for it later.
-                state.insert(old_reader_pos, buf.to_vec());
+                if bytes_read > 0 {
+                    state.insert(old_reader_pos, buf[0..bytes_read].to_vec());
+                }
             }
             if reader_created {
                 state.stats.num_http_streams += 1;
