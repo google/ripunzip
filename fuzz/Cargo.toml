@@ -1,0 +1,37 @@
+# Copyright 2022 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+# https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+# <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+# option. This file may not be copied, modified, or distributed
+# except according to those terms.
+
+[package]
+name = "ripunzip-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version="0.4", features=["arbitrary-derive"] }
+tempfile = "3.3.0"
+zip = "0.6.3"
+anyhow = "1.0.66"
+strum = { version = "0.24.1", features = ["derive"] }
+walkdir = "2.3.2"
+itertools = "0.10.5"
+
+[dependencies.ripunzip]
+path = ".."
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_ripunzip"
+path = "fuzz_targets/fuzz_ripunzip.rs"
+test = false
+doc = false
