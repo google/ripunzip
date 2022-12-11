@@ -477,7 +477,15 @@ impl Seek for SeekableHttpReader {
         // TODO used checked arithmetic when stabilized
         self.pos = match pos {
             SeekFrom::Start(pos) => pos,
-            SeekFrom::End(pos) => self.engine.len() - ((-pos) as u64),
+            SeekFrom::End(pos) => {
+                if -pos > self.engine.len() as i64 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "Rewind too far",
+                    ));
+                }
+                self.engine.len() - ((-pos) as u64)
+            }
             SeekFrom::Current(offset_from_pos) => {
                 if offset_from_pos > 0 {
                     self.pos + (offset_from_pos as u64)

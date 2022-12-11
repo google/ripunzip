@@ -50,10 +50,6 @@ impl RangeFetcher {
         let accept_ranges = response
             .headers()
             .contains_key(reqwest::header::ACCEPT_RANGES);
-        println!(
-            "URI: {}, total length {}, accept ranges {}",
-            uri, content_length, accept_ranges
-        );
         Ok(Self {
             uri,
             accept_ranges,

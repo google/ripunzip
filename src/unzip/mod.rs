@@ -254,10 +254,6 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
         let errors = self
             .zipfile
             .unzip(single_threaded, output_directory, &self.progress_reporter);
-        // Output any errors we found on any file
-        for error in &errors {
-            eprintln!("Error: {}", error)
-        }
         // Return the first error code, if any.
         errors.into_iter().next().map(Result::Err).unwrap_or(Ok(()))
     }
@@ -287,25 +283,27 @@ fn extract_file_inner(
     output_directory: &Option<PathBuf>,
     progress_reporter: &dyn UnzipProgressReporter,
 ) -> Result<()> {
-    if file.is_dir() {
-        return Ok(());
-    }
     let name = file
         .enclosed_name()
         .ok_or_else(|| std::io::Error::new(ErrorKind::Unsupported, "path not safe to extract"))?;
-    let name = name.to_path_buf();
+    let out_path = match output_directory {
+        Some(output_directory) => output_directory.join(name),
+        None => PathBuf::from(name),
+    };
     let display_name = name.display().to_string();
     progress_reporter.extraction_starting(&display_name);
-    let out_path = match output_directory {
-        Some(output_directory) => output_directory.join(file.name()),
-        None => PathBuf::from(file.name()),
-    };
-    if let Some(parent) = out_path.parent() {
-        create_dir_all(parent)?;
+    if file.name().ends_with("/") {
+        create_dir_all(&out_path)?;
+    } else {
+        if let Some(parent) = out_path.parent() {
+            if !parent.exists() {
+                create_dir_all(parent)?;
+            }
+        }
+        let mut out_file = File::create(&out_path)?;
+        std::io::copy(&mut file, &mut out_file)?;
+        progress_reporter.bytes_extracted(file.compressed_size());
     }
-    let mut out_file = File::create(&out_path)?;
-    std::io::copy(&mut file, &mut out_file)?;
-    progress_reporter.bytes_extracted(file.compressed_size());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

@@ -89,6 +89,12 @@ impl<R: Read + Seek + HasLength> Seek for CloneableSeekableReader<R> {
             SeekFrom::Start(pos) => pos,
             SeekFrom::End(offset_from_end) => {
                 let file_len = self.ascertain_file_length();
+                if -offset_from_end as u64 > file_len {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Seek too far backwards",
+                    ));
+                }
                 // TODO, once stabilised, use checked_add_signed
                 file_len - (-offset_from_end as u64)
             }
