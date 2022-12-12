@@ -341,15 +341,16 @@ fn extract_file_inner(
         if let Some(parent) = out_path.parent() {
             directory_creator.create_dir_all(parent)?;
         }
-        let mut out_file = File::create(&out_path)?;
-        std::io::copy(&mut file, &mut out_file)?;
+        let mut out_file = File::create(&out_path).with_context(|| "Failed to create file")?;
+        std::io::copy(&mut file, &mut out_file).with_context(|| "Failed to write directory")?;
         progress_reporter.bytes_extracted(file.compressed_size());
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if let Some(mode) = file.unix_mode() {
-            std::fs::set_permissions(&out_path, Permissions::from_mode(mode))?;
+            std::fs::set_permissions(&out_path, Permissions::from_mode(mode))
+                .with_context(|| "Failed to set permissions")?;
         }
     }
     progress_reporter.extraction_finished(&display_name);
@@ -362,7 +363,7 @@ fn extract_file_inner(
 struct DirectoryCreator(Mutex<()>);
 
 impl DirectoryCreator {
-    fn create_dir_all(&self, path: &Path) -> std::io::Result<()> {
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
         // Fast path - avoid locking if the directory exists
         if path.exists() {
             return Ok(());
@@ -371,7 +372,7 @@ impl DirectoryCreator {
         if path.exists() {
             return Ok(());
         }
-        std::fs::create_dir_all(path)
+        std::fs::create_dir_all(path).with_context(|| "Failed to create directory")
     }
 }
 
