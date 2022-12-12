@@ -63,10 +63,19 @@ enum Method {
     },
 }
 
+#[derive(Eq, PartialEq, Hash, Debug, Clone, Copy, arbitrary::Arbitrary)]
+enum CompressionMethod {
+    Stored,
+    Deflated,
+    Bzip2,
+    Zstd,
+}
+
 #[derive(arbitrary::Arbitrary, Debug, Clone)]
 struct Inputs {
     // HashMap to ensure unique filenames in zip
     zip_members: HashMap<ZipMemberFilename, Vec<u8>>,
+    compression_method: CompressionMethod,
     single_threaded: bool,
     method: Method,
 }
@@ -83,7 +92,7 @@ fuzz_target!(|input: Inputs| {
     };
     let zipfile = tempdir.path().join("file.zip");
     let mut zipdata = Vec::new();
-    create_zip(&mut zipdata, &input.zip_members);
+    create_zip(&mut zipdata, &input.zip_members, input.compression_method);
     let mut file = std::fs::File::create(&zipfile).unwrap();
     file.write_all(&zipdata).unwrap();
     drop(file);
@@ -186,10 +195,19 @@ fn recursive_lsdir(dir: &Path) -> HashSet<std::path::PathBuf> {
         .collect()
 }
 
-fn create_zip(output: &mut Vec<u8>, zip_members: &HashMap<ZipMemberFilename, Vec<u8>>) {
+fn create_zip(
+    output: &mut Vec<u8>,
+    zip_members: &HashMap<ZipMemberFilename, Vec<u8>>,
+    compression_method: CompressionMethod,
+) {
+    let compression_method = match compression_method {
+        CompressionMethod::Stored => zip::CompressionMethod::Stored,
+        CompressionMethod::Deflated => zip::CompressionMethod::Deflated,
+        CompressionMethod::Bzip2 => zip::CompressionMethod::Bzip2,
+        CompressionMethod::Zstd => zip::CompressionMethod::Zstd,
+    };
     let mut zip = zip::ZipWriter::new(Cursor::new(output));
-    let options =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = zip::write::FileOptions::default().compression_method(compression_method);
     for (name, data) in zip_members.iter() {
         zip.start_file(&name.0, options).unwrap();
         zip.write(&data).unwrap();
