@@ -14,10 +14,10 @@ mod test_utils;
 
 use std::{
     borrow::Cow,
-    fs::{create_dir_all, File, Permissions},
+    fs::{File, Permissions},
     io::{ErrorKind, Read, Seek},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{Context, Result};
@@ -72,6 +72,7 @@ pub struct UnzipEngine<P: UnzipProgressReporter> {
     options: UnzipOptions,
     zipfile: Box<dyn UnzipEngineImpl>,
     compressed_length: u64,
+    directory_creator: DirectoryCreator,
 }
 
 /// The underlying engine used by the unzipper. This is different
@@ -85,6 +86,7 @@ trait UnzipEngineImpl {
         single_threaded: bool,
         output_directory: &Option<PathBuf>,
         progress_reporter: &(dyn UnzipProgressReporter + Sync),
+        directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error>;
 }
 
@@ -104,17 +106,34 @@ impl UnzipEngineImpl for UnzipFileEngine {
         single_threaded: bool,
         output_directory: &Option<PathBuf>,
         progress_reporter: &(dyn UnzipProgressReporter + Sync),
+        directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         if single_threaded {
             (0..self.len())
                 .into_iter()
-                .map(|i| extract_file(&mut self.0, i, output_directory, progress_reporter))
+                .map(|i| {
+                    extract_file(
+                        &mut self.0,
+                        i,
+                        output_directory,
+                        progress_reporter,
+                        directory_creator,
+                    )
+                })
                 .filter_map(Result::err)
                 .collect()
         } else {
             (0..self.len())
                 .into_par_iter()
-                .map(|i| extract_file(&mut self.0.clone(), i, output_directory, progress_reporter))
+                .map(|i| {
+                    extract_file(
+                        &mut self.0.clone(),
+                        i,
+                        output_directory,
+                        progress_reporter,
+                        directory_creator,
+                    )
+                })
                 .filter_map(Result::err)
                 .collect()
         }
@@ -143,19 +162,36 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
         single_threaded: bool,
         output_directory: &Option<PathBuf>,
         progress_reporter: &(dyn UnzipProgressReporter + Sync),
+        directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         self.0
             .set_expected_access_pattern(AccessPattern::SequentialIsh);
         let result = if single_threaded {
             (0..self.len())
                 .into_iter()
-                .map(|i| extract_file(&mut self.1, i, output_directory, progress_reporter))
+                .map(|i| {
+                    extract_file(
+                        &mut self.1,
+                        i,
+                        output_directory,
+                        progress_reporter,
+                        directory_creator,
+                    )
+                })
                 .filter_map(Result::err)
                 .collect()
         } else {
             (0..self.len())
                 .into_par_iter()
-                .map(|i| extract_file(&mut self.1.clone(), i, output_directory, progress_reporter))
+                .map(|i| {
+                    extract_file(
+                        &mut self.1.clone(),
+                        i,
+                        output_directory,
+                        progress_reporter,
+                        directory_creator,
+                    )
+                })
                 .filter_map(Result::err)
                 .collect()
         };
@@ -180,6 +216,7 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
             options,
             zipfile: Box::new(UnzipFileEngine(ZipArchive::new(zipfile)?)),
             compressed_length,
+            directory_creator: DirectoryCreator::default(),
         })
     }
 
@@ -231,6 +268,7 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
             options,
             zipfile,
             compressed_length,
+            directory_creator: DirectoryCreator::default(),
         })
     }
 
@@ -251,9 +289,12 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
             .total_bytes_expected(self.compressed_length);
         let output_directory = &self.options.output_directory;
         let single_threaded = self.options.single_threaded;
-        let errors = self
-            .zipfile
-            .unzip(single_threaded, output_directory, &self.progress_reporter);
+        let errors = self.zipfile.unzip(
+            single_threaded,
+            output_directory,
+            &self.progress_reporter,
+            &self.directory_creator,
+        );
         // Return the first error code, if any.
         errors.into_iter().next().map(Result::Err).unwrap_or(Ok(()))
     }
@@ -266,6 +307,7 @@ fn extract_file<T: Read + Seek>(
     i: usize,
     output_directory: &Option<PathBuf>,
     progress_reporter: &dyn UnzipProgressReporter,
+    directory_creator: &DirectoryCreator,
 ) -> Result<()> {
     let file = myzip.by_index(i)?;
     let name = file
@@ -273,7 +315,7 @@ fn extract_file<T: Read + Seek>(
         .map(Path::to_string_lossy)
         .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
         .to_string();
-    extract_file_inner(file, output_directory, progress_reporter)
+    extract_file_inner(file, output_directory, progress_reporter, directory_creator)
         .with_context(|| format!("Failed to extract {}", name))
 }
 
@@ -282,6 +324,7 @@ fn extract_file_inner(
     mut file: ZipFile,
     output_directory: &Option<PathBuf>,
     progress_reporter: &dyn UnzipProgressReporter,
+    directory_creator: &DirectoryCreator,
 ) -> Result<()> {
     let name = file
         .enclosed_name()
@@ -293,12 +336,10 @@ fn extract_file_inner(
     let display_name = name.display().to_string();
     progress_reporter.extraction_starting(&display_name);
     if file.name().ends_with("/") {
-        create_dir_all(&out_path)?;
+        directory_creator.create_dir_all(&out_path)?;
     } else {
         if let Some(parent) = out_path.parent() {
-            if !parent.exists() {
-                create_dir_all(parent)?;
-            }
+            directory_creator.create_dir_all(parent)?;
         }
         let mut out_file = File::create(&out_path)?;
         std::io::copy(&mut file, &mut out_file)?;
@@ -313,6 +354,25 @@ fn extract_file_inner(
     }
     progress_reporter.extraction_finished(&display_name);
     Ok(())
+}
+
+/// An engine used to ensure we don't conflict in creating directories
+/// between threads
+#[derive(Default)]
+struct DirectoryCreator(Mutex<()>);
+
+impl DirectoryCreator {
+    fn create_dir_all(&self, path: &Path) -> std::io::Result<()> {
+        // Fast path - avoid locking if the directory exists
+        if path.exists() {
+            return Ok(());
+        }
+        let _exclusivity = self.0.lock().unwrap();
+        if path.exists() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(path)
+    }
 }
 
 #[cfg(test)]
