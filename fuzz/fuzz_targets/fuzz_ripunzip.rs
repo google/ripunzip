@@ -12,8 +12,10 @@
 //! zip-rs and ripunzip always result in the same outcomes.
 
 #![no_main]
+use httptest::{responders::*, Expectation, Server};
 use libfuzzer_sys::arbitrary;
 use libfuzzer_sys::fuzz_target;
+use ripunzip::RangeAwareResponse;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Cursor;
@@ -57,11 +59,28 @@ enum CompressionMethod {
 }
 
 #[derive(arbitrary::Arbitrary, Debug, Clone)]
+enum ServerType {
+    NoContentLength,
+    ContentLengthButNoRanges,
+    Ranges,
+}
+
+#[derive(arbitrary::Arbitrary, Debug, Clone)]
+enum Method {
+    File,
+    Uri {
+        readahead_limit: Option<usize>,
+        server_type: ServerType,
+    },
+}
+
+#[derive(arbitrary::Arbitrary, Debug, Clone)]
 struct Inputs {
     // HashMap to ensure unique filenames in zip
     zip_members: HashMap<ZipMemberFilename, Vec<u8>>,
     compression_method: CompressionMethod,
     single_threaded: bool,
+    method: Method,
 }
 
 fuzz_target!(|input: Inputs| {
@@ -80,10 +99,80 @@ fuzz_target!(|input: Inputs| {
     let mut file = std::fs::File::create(&zipfile).unwrap();
     file.write_all(&zip_data).unwrap();
     drop(file);
-    let file = std::fs::File::open(&zipfile).unwrap();
-    let ripunzip_result: Result<(), anyhow::Error> = (|| {
-        let ripunzip = ripunzip::UnzipEngine::for_file(file, options, progress_reporter)?;
-        ripunzip.unzip()
+    let ripunzip_result: Result<(), anyhow::Error> = (|| match input.method {
+        Method::File => {
+            let file = std::fs::File::open(&zipfile).unwrap();
+            let ripunzip = ripunzip::UnzipEngine::for_file(file, options, progress_reporter)?;
+            ripunzip.unzip()
+        }
+        Method::Uri {
+            readahead_limit,
+            server_type,
+        } => {
+            let server = Server::run();
+            match server_type {
+                ServerType::NoContentLength => {
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "HEAD", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(status_code(200)),
+                    );
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "GET", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(status_code(200).body(zip_data)),
+                    );
+                }
+                ServerType::ContentLengthButNoRanges => {
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "HEAD", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(
+                            status_code(200)
+                                .append_header("Content-Length", format!("{}", zip_data.len())),
+                        ),
+                    );
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "GET", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(status_code(200).body(zip_data)),
+                    );
+                }
+                ServerType::Ranges => {
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "HEAD", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(RangeAwareResponse::new(200, zip_data.clone())),
+                    );
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "GET", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(RangeAwareResponse::new(206, zip_data)),
+                    );
+                }
+            }
+            let uri = &server.url("/foo").to_string();
+            let ripunzip = ripunzip::UnzipEngine::for_uri(
+                uri,
+                options,
+                readahead_limit,
+                progress_reporter,
+                || {},
+            )?;
+            ripunzip.unzip()
+        }
     })();
     let unziprs_result = unzip_with_zip_rs(&zipfile, &output_directory_unzip);
     match unziprs_result {
