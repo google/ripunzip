@@ -10,10 +10,12 @@ use http::{StatusCode, Version};
 use regex::Regex;
 
 /// A response for use with `httptest` which is aware of HTTP ranges.
-pub(crate) struct RangeAwareResponse(u16, Vec<u8>);
+pub struct RangeAwareResponse(u16, Vec<u8>);
 
 impl RangeAwareResponse {
-    pub(crate) fn new(status_code: u16, body: Vec<u8>) -> Self {
+    /// Create a new response suitable for use with `httptest` which can
+    /// reply with ranges.
+    pub fn new(status_code: u16, body: Vec<u8>) -> Self {
         Self(status_code, body)
     }
 }

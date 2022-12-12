@@ -7,11 +7,14 @@
 // except according to those terms.
 
 #![no_main]
+use httptest::{responders::*, Expectation, Server};
 use libfuzzer_sys::arbitrary;
 use libfuzzer_sys::fuzz_target;
 use std::collections::{HashMap, HashSet};
+use ripunzip::RangeAwareResponse;
 use std::fs::File;
 use std::io::prelude::*;
+use std::io::Cursor;
 use std::path::Path;
 
 #[derive(arbitrary::Arbitrary, Debug, Clone, strum::Display)]
@@ -45,10 +48,27 @@ impl<'a> arbitrary::Arbitrary<'a> for ZipMemberFilename {
 
 
 #[derive(arbitrary::Arbitrary, Debug, Clone)]
+enum ServerType {
+    NoContentLength,
+    ContentLengthButNoRanges,
+    Ranges,
+}
+
+#[derive(arbitrary::Arbitrary, Debug, Clone)]
+enum Method {
+    File,
+    Uri {
+        readahead_limit: Option<usize>,
+        server_type: ServerType,
+    },
+}
+
+#[derive(arbitrary::Arbitrary, Debug, Clone)]
 struct Inputs {
     // HashMap to ensure unique filenames in zip
     zip_members: HashMap<ZipMemberFilename, Vec<u8>>,
     single_threaded: bool,
+    method: Method,
 }
 
 fuzz_target!(|input: Inputs| {
@@ -62,13 +82,85 @@ fuzz_target!(|input: Inputs| {
         output_directory: Some(output_directory.clone()),
     };
     let zipfile = tempdir.path().join("file.zip");
+    let mut zipdata = Vec::new();
+    create_zip(&mut zipdata, &input.zip_members);
     let mut file = std::fs::File::create(&zipfile).unwrap();
-    create_zip(&mut file, input.zip_members);
+    file.write_all(&zipdata).unwrap();
     drop(file);
-    let file = std::fs::File::open(&zipfile).unwrap();
-    let ripunzip_result: Result<(), anyhow::Error> = (|| {
-        let ripunzip = ripunzip::UnzipEngine::for_file(file, options, progress_reporter)?;
-        ripunzip.unzip()
+    let ripunzip_result: Result<(), anyhow::Error> = (|| match input.method {
+        Method::File => {
+            let file = std::fs::File::open(&zipfile).unwrap();
+            let ripunzip = ripunzip::UnzipEngine::for_file(file, options, progress_reporter)?;
+            ripunzip.unzip()
+        }
+        Method::Uri {
+            readahead_limit,
+            server_type,
+        } => {
+            let server = Server::run();
+            match server_type {
+                ServerType::NoContentLength => {
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "HEAD", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(status_code(200)),
+                    );
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "GET", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(status_code(200).body(zipdata)),
+                    );
+                }
+                ServerType::ContentLengthButNoRanges => {
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "HEAD", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(
+                            status_code(200)
+                                .append_header("Content-Length", format!("{}", zipdata.len())),
+                        ),
+                    );
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "GET", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(status_code(200).body(zipdata)),
+                    );
+                }
+                ServerType::Ranges => {
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "HEAD", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(RangeAwareResponse::new(200, zipdata.clone())),
+                    );
+                    server.expect(
+                        Expectation::matching(httptest::matchers::request::method_path(
+                            "GET", "/foo",
+                        ))
+                        .times(..)
+                        .respond_with(RangeAwareResponse::new(206, zipdata)),
+                    );
+                }
+            }
+            let uri = &server.url("/foo").to_string();
+            let ripunzip = ripunzip::UnzipEngine::for_uri(
+                uri,
+                options,
+                readahead_limit,
+                progress_reporter,
+                || {},
+            )?;
+            ripunzip.unzip()
+        }
     })();
     let unziprs_result = unzip_with_zip_rs(&zipfile, &output_directory_unzip);
     match unziprs_result {
@@ -95,10 +187,10 @@ fn recursive_lsdir(dir: &Path) -> HashSet<std::path::PathBuf> {
 }
 
 fn create_zip(output: &mut Vec<u8>, zip_members: &HashMap<ZipMemberFilename, Vec<u8>>) {
-    let mut zip = zip::ZipWriter::new(output);
+    let mut zip = zip::ZipWriter::new(Cursor::new(output));
     let options =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (name, data) in zip_members.into_iter() {
+    for (name, data) in zip_members.iter() {
         zip.start_file(&name.0, options).unwrap();
         zip.write(&data).unwrap();
     }

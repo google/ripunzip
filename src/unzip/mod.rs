@@ -9,8 +9,10 @@
 mod cloneable_seekable_reader;
 mod http_range_reader;
 mod seekable_http_reader;
-#[cfg(test)]
-mod test_utils;
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod test_utils;
+#[cfg(feature = "fuzzing")]
+pub use test_utils::RangeAwareResponse;
 
 use std::{
     borrow::Cow,
