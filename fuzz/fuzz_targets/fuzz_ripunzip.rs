@@ -14,10 +14,40 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 
+#[derive(arbitrary::Arbitrary, Debug, Clone, strum::Display)]
+enum FilenameSegment {
+    Fish,
+    A,
+    #[strum(serialize = "b")]
+    B,
+    #[strum(serialize = "31")]
+    ThirtyOne,
+    #[strum(serialize = "_c")]
+    C,
+    D,
+    #[strum(serialize = "e.txt")]
+    ETxt,
+}
+
+#[derive(Eq, PartialEq, Hash, Debug, Clone)]
+struct ZipMemberFilename(String);
+
+impl<'a> arbitrary::Arbitrary<'a> for ZipMemberFilename {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let mut pb = std::path::PathBuf::new();
+        for s in u.arbitrary_iter::<FilenameSegment>()? {
+            let s = std::path::PathBuf::from(format!("{}", s?));
+            pb = pb.join(s);
+        }
+        Ok(Self(pb.display().to_string()))
+    }
+}
+
+
 #[derive(arbitrary::Arbitrary, Debug, Clone)]
 struct Inputs {
     // HashMap to ensure unique filenames in zip
-    zip_members: HashMap<String, Vec<u8>>,
+    zip_members: HashMap<ZipMemberFilename, Vec<u8>>,
     single_threaded: bool,
 }
 
@@ -64,12 +94,12 @@ fn recursive_lsdir(dir: &Path) -> HashSet<std::path::PathBuf> {
         .collect()
 }
 
-fn create_zip(output: &mut File, zip_members: HashMap<String, Vec<u8>>) {
+fn create_zip(output: &mut Vec<u8>, zip_members: &HashMap<ZipMemberFilename, Vec<u8>>) {
     let mut zip = zip::ZipWriter::new(output);
     let options =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for (name, data) in zip_members.into_iter() {
-        zip.start_file(name, options).unwrap();
+        zip.start_file(&name.0, options).unwrap();
         zip.write(&data).unwrap();
     }
     zip.finish().unwrap();

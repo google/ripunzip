@@ -20,6 +20,7 @@ libfuzzer-sys = { version="0.4", features=["arbitrary-derive"] }
 tempfile = "3.3.0"
 zip = "0.6.3"
 anyhow = "1.0.66"
+strum = { version = "0.24.1", features = ["derive"] }
 walkdir = "2.3.2"
 
 [dependencies.ripunzip]
