@@ -10,8 +10,8 @@
 use httptest::{responders::*, Expectation, Server};
 use libfuzzer_sys::arbitrary;
 use libfuzzer_sys::fuzz_target;
-use std::collections::{HashMap, HashSet};
 use ripunzip::RangeAwareResponse;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
@@ -45,7 +45,6 @@ impl<'a> arbitrary::Arbitrary<'a> for ZipMemberFilename {
         Ok(Self(pb.display().to_string()))
     }
 }
-
 
 #[derive(arbitrary::Arbitrary, Debug, Clone)]
 enum ServerType {
