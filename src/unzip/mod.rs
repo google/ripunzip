@@ -335,7 +335,7 @@ fn extract_file_inner(
     };
     let display_name = name.display().to_string();
     progress_reporter.extraction_starting(&display_name);
-    if file.name().ends_with("/") {
+    if file.name().ends_with('/') {
         directory_creator.create_dir_all(&out_path)?;
     } else {
         if let Some(parent) = out_path.parent() {
