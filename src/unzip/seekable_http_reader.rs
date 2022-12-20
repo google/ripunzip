@@ -237,7 +237,6 @@ pub(crate) struct SeekableHttpReaderStatistics {
 
 impl SeekableHttpReaderEngine {
     /// Create a new seekable HTTP reader engine for this URI.
-    /// This method will fail
     pub(crate) fn new(
         uri: String,
         readahead_limit: Option<usize>,
