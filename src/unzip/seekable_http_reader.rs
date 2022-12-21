@@ -432,6 +432,10 @@ impl SeekableHttpReaderEngine {
         if old_access_pattern == access_pattern {
             return;
         }
+        log::info!(
+            "Changing access pattern - current stats are {:?}",
+            state.stats
+        );
         if matches!(access_pattern, AccessPattern::SequentialIsh) {
             if state.read_in_progress {
                 panic!("Must not call set_expected_access_pattern while a read is in progress");
