@@ -118,12 +118,6 @@ impl State {
     /// not yet read by the readers.
     fn read_from_cache(&mut self, pos: u64, buf: &mut [u8]) -> Option<usize> {
         let discard_read_data = matches!(self.access_pattern, AccessPattern::SequentialIsh);
-        log::info!(
-            "Check cache - pos required is 0x{:x}, cache contains {}, will discard data {}",
-            pos,
-            self.describe_cache(),
-            discard_read_data
-        );
         let mut hit_found = None;
         for (possible_block_start, block) in
             self.cache.range(pos - min(pos, MAX_BLOCK as u64)..=pos)
@@ -167,11 +161,6 @@ impl State {
                 self.current_size -= to_read;
             }
 
-            log::info!(
-                "Cache hit at 0x{:x} - after split cache contains {}",
-                pos,
-                self.describe_cache()
-            );
             return Some(to_read);
         }
         None
@@ -304,10 +293,6 @@ impl SeekableHttpReaderEngine {
         // Cases where you have READER but want STATE: after read,
         // ... but this deadlock can't happen because only one thread
         //     will enter this 'read in progress' block.
-
-        // let reader = self.reader.lock().unwrap();
-        // let stats = format!("Stats: {:?}", reader.stats);
-        // let cache_stats = format!("Cache: {:?}", reader.cache);
         log::info!("Read: requested position 0x{:x}.", pos);
 
         // Claim CACHE mutex
@@ -330,11 +315,6 @@ impl SeekableHttpReaderEngine {
             read_in_progress = state.read_in_progress;
         }
         state.stats.cache_misses += 1;
-        log::info!(
-            "Cache miss at 0x{:x} - cache contains {}",
-            pos,
-            state.describe_cache()
-        );
         //   - If no:
         //     set read in progress
         state.read_in_progress = true;
