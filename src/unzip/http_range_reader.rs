@@ -110,10 +110,9 @@ fn content_length_via_headers(response: &Response) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use httptest::{matchers::*, responders::*, Expectation, Server};
+    use ripunzip_test_utils::*;
     use std::io::Read;
     use test_log::test;
-
-    use crate::unzip::test_utils::RangeAwareResponse;
 
     use super::RangeFetcher;
 
@@ -123,7 +122,10 @@ mod tests {
         server.expect(if accept_ranges {
             Expectation::matching(request::method_path("HEAD", "/foo"))
                 .times(..)
-                .respond_with(RangeAwareResponse::new(200, body.as_bytes().to_vec()))
+                .respond_with(RangeAwareResponse::new(
+                    200,
+                    RangeAwareResponseType::Body(hyper::body::Bytes::from(body)),
+                ))
         } else {
             Expectation::matching(request::method_path("HEAD", "/foo"))
                 .times(..)
@@ -138,7 +140,10 @@ mod tests {
         server.expect(if accept_ranges {
             Expectation::matching(any())
                 .times(..)
-                .respond_with(RangeAwareResponse::new(206, body.as_bytes().to_vec()))
+                .respond_with(RangeAwareResponse::new(
+                    206,
+                    RangeAwareResponseType::Body(hyper::body::Bytes::from(body)),
+                ))
         } else {
             Expectation::matching(any())
                 .times(..)

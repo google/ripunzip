@@ -12,6 +12,3 @@ pub use unzip::NullProgressReporter;
 pub use unzip::UnzipEngine;
 pub use unzip::UnzipOptions;
 pub use unzip::UnzipProgressReporter;
-
-#[cfg(feature = "fuzzing")]
-pub use unzip::RangeAwareResponse;

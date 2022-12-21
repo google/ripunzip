@@ -1,0 +1,26 @@
+# Copyright 2022 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+# https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+# <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+# option. This file may not be copied, modified, or distributed
+# except according to those terms.
+
+[package]
+name = "ripunzip_test_utils"
+version = "0.0.1"
+edition = "2021"
+authors = ["Adrian Taylor <adetaylor@chromium.org>"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+arbitrary = { version="1.2", features = ["derive"] }
+http = "0.2.8"
+httptest = "0.15.4"
+hyper = "0.14.23"
+lipsum = "0.8.2"
+log = "0.4.17"
+once_cell = "1.16.0"
+regex = "1.7.0"
+strum = { version = "0.24", features = ["derive"] }
+zip = "0.6.3"

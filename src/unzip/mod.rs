@@ -9,10 +9,6 @@
 mod cloneable_seekable_reader;
 mod http_range_reader;
 mod seekable_http_reader;
-#[cfg(any(test, feature = "fuzzing"))]
-pub mod test_utils;
-#[cfg(feature = "fuzzing")]
-pub use test_utils::RangeAwareResponse;
 
 use std::{
     borrow::Cow,
@@ -391,8 +387,7 @@ mod tests {
     use zip::{write::FileOptions, ZipWriter};
 
     use crate::{NullProgressReporter, UnzipEngine, UnzipOptions};
-
-    use super::test_utils::RangeAwareResponse;
+    use ripunzip_test_utils::*;
 
     fn create_zip_file(path: &Path) {
         let file = File::create(path).unwrap();
@@ -463,7 +458,7 @@ mod tests {
         check_files_exist(&outdir);
     }
 
-    use httptest::{matchers::request::method_path, Expectation, Server};
+    use httptest::Server;
 
     #[test]
     fn test_extract_from_server() {
@@ -475,16 +470,7 @@ mod tests {
         hexdump::hexdump(&body);
 
         let server = Server::run();
-        server.expect(
-            Expectation::matching(method_path("HEAD", "/foo"))
-                .times(..)
-                .respond_with(RangeAwareResponse::new(200, body.clone())),
-        );
-        server.expect(
-            Expectation::matching(method_path("GET", "/foo"))
-                .times(..)
-                .respond_with(RangeAwareResponse::new(206, body)),
-        );
+        set_up_server(&server, body, ServerType::Ranges);
 
         let outdir = td.path().join("outdir");
         let options = UnzipOptions {
@@ -502,5 +488,61 @@ mod tests {
         .unzip()
         .unwrap();
         check_files_exist(&outdir);
+    }
+
+    fn unzip_sample_zip(zip_params: ZipParams, server_type: ServerType) {
+        let td = tempdir().unwrap();
+        let zip_data = ripunzip_test_utils::get_sample_zip(&zip_params);
+
+        let server = Server::run();
+        set_up_server(&server, zip_data, server_type);
+
+        let outdir = td.path().join("outdir");
+        let options = UnzipOptions {
+            output_directory: Some(outdir),
+            single_threaded: false,
+        };
+        UnzipEngine::for_uri(
+            &server.url("/foo").to_string(),
+            options,
+            None,
+            NullProgressReporter,
+            || {},
+        )
+        .unwrap()
+        .unzip()
+        .unwrap();
+    }
+
+    #[test]
+    fn test_extract_biggish_zip_from_ranges_server() {
+        unzip_sample_zip(
+            ZipParams::new(FileSizes::Variable, 15, zip::CompressionMethod::Deflated),
+            ServerType::Ranges,
+        )
+    }
+
+    #[test]
+    fn test_small_zip_from_ranges_server() {
+        unzip_sample_zip(
+            ZipParams::new(FileSizes::Variable, 3, zip::CompressionMethod::Deflated),
+            ServerType::Ranges,
+        )
+    }
+
+    #[test]
+    fn test_small_zip_from_no_range_server() {
+        unzip_sample_zip(
+            ZipParams::new(FileSizes::Variable, 3, zip::CompressionMethod::Deflated),
+            ServerType::ContentLengthButNoRanges,
+        )
+    }
+
+    #[test]
+    fn test_small_zip_from_no_content_length_server() {
+        unzip_sample_zip(
+            ZipParams::new(FileSizes::Variable, 3, zip::CompressionMethod::Deflated),
+            ServerType::NoContentLength,
+        )
     }
 }

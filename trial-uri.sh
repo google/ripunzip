@@ -9,7 +9,8 @@
 # except according to those terms.
 
 # This is a noddy benchmark to compare regular unzip to ripunzip.
-# It may not be realistic.
+# It may not be realistic. For something with more statistical
+# rigor, see the benches directory.
 
 URI="https://chromium-browser-asan.storage.googleapis.com/linux-release/asan-linux-release-970006.zip"
 
@@ -27,6 +28,7 @@ rm -Rf /tmp/testa
 mkdir /tmp/testa
 pushd /tmp/testa
 echo unzip:
-time sh -c "curl -o zipfile.zip \"$URI\" && unzip zipfile.zip > /dev/null"
+time sh -c "curl -o zipfile.zip \"$URI\" > /dev/null"
+time sh -c "unzip zipfile.zip > /dev/null"
 popd
 rm -Rf /tmp/testa
