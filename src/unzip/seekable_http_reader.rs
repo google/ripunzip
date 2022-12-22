@@ -13,7 +13,6 @@ use std::{
     sync::{Arc, Condvar, Mutex},
 };
 
-use itertools::Itertools;
 use reqwest::blocking::Response;
 use thiserror::Error;
 
@@ -22,7 +21,18 @@ use super::{
     http_range_reader::{self, RangeFetcher},
 };
 
-const MAX_BLOCK: usize = 4096;
+/// This is how much we read from the underlying HTTP stream in a given thread,
+/// before signalling other threads that they may wish to continue with their
+/// CPU-bound unzipping. Empirically determined.
+/// 128KB = 172ms
+/// 512KB = 187ms
+/// 1024KB = 152ms
+/// 2048KB = 170ms
+/// If we set this too high, we starve multiple threads - they can't start
+/// acting on the data to unzip their files until the read is complete. If we
+/// set this too low, the cache structure (a `BTreeMap`) becomes dominant in
+/// CPU usage.
+const MAX_BLOCK: usize = 1024 * 1024;
 
 /// A hint to the [`SeekableHttpReaderEngine`] about the expected access pattern.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -52,6 +62,30 @@ pub(crate) enum Error {
     RangeFetcherError(http_range_reader::Error),
 }
 
+/// Some data that we've read from the network, but not yet returned to the
+/// caller.
+struct CacheCell {
+    data: Vec<u8>,
+    bytes_read: usize,
+}
+
+impl CacheCell {
+    fn new(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            bytes_read: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    fn entirely_consumed(&self) -> bool {
+        self.bytes_read >= self.len()
+    }
+}
+
 /// Internal state of the [`SeekableHttpReaderEngine`], in a separate struct
 /// because access is protected by a mutex.
 #[derive(Default)]
@@ -70,7 +104,7 @@ struct State {
     /// to rewind a bit. Therefore if we fast-forward, we store any data that
     /// we skipped over, in order to service any subsequent requests for those
     /// positions.
-    cache: BTreeMap<u64, Vec<u8>>,
+    cache: BTreeMap<u64, CacheCell>,
     /// Whether a read from the underlying HTTP stream is afoot. Only one thread
     /// can be doing a read at a time.
     read_in_progress: bool,
@@ -80,6 +114,13 @@ struct State {
 
 impl State {
     fn new(readahead_limit: Option<usize>, access_pattern: AccessPattern) -> Self {
+        // Grow the readahead limit if it's less than block size, because we
+        // must always store one block in order to service the most recent read.
+        let readahead_limit = match readahead_limit {
+            Some(readahead_limit) if readahead_limit > MAX_BLOCK => Some(readahead_limit),
+            Some(_) => Some(MAX_BLOCK),
+            _ => None,
+        };
         Self {
             readahead_limit,
             access_pattern,
@@ -95,7 +136,7 @@ impl State {
             pos + block.len() as u64
         );
         let extra_size = block.len();
-        self.cache.insert(pos, block);
+        self.cache.insert(pos, CacheCell::new(block));
         self.current_size += extra_size;
         if let Some(readahead_limit) = self.readahead_limit {
             // Shrink
@@ -118,9 +159,10 @@ impl State {
     /// not yet read by the readers.
     fn read_from_cache(&mut self, pos: u64, buf: &mut [u8]) -> Option<usize> {
         let discard_read_data = matches!(self.access_pattern, AccessPattern::SequentialIsh);
-        let mut hit_found = None;
+        let mut block_to_discard = None;
+        let mut return_value = None;
         for (possible_block_start, block) in
-            self.cache.range(pos - min(pos, MAX_BLOCK as u64)..=pos)
+            self.cache.range_mut(pos - min(pos, MAX_BLOCK as u64)..=pos)
         {
             let block_offset = pos as usize - *possible_block_start as usize;
             let block_len = block.len();
@@ -131,46 +173,25 @@ impl State {
             }
             // OK, we've found a block which overlaps with the read that we
             // want to do.
-            // Let's do the rest outside the 'for' loop to make the borrow
-            // checker happy.
-            hit_found = Some(*possible_block_start);
+
+            let block_len = block.len();
+            let block_offset = pos as usize - *possible_block_start as usize;
+            let to_read = min(buf.len(), block_len - block_offset);
+            buf[..to_read].copy_from_slice(&block.data[block_offset..to_read + block_offset]);
+            block.bytes_read += to_read;
+            self.stats.cache_hits += 1;
+            if discard_read_data && block.entirely_consumed() {
+                // Discard this block, but outside this loop
+                block_to_discard = Some(*possible_block_start);
+                self.current_size -= block.len();
+            }
+            return_value = Some(to_read);
             break;
         }
-        if let Some(possible_block_start) = hit_found {
-            log::info!("Cache hit at 0x{:x}, within block starting at 0x{:x}, before splitting cache contains {}", pos, possible_block_start, self.describe_cache());
-            let block = self.cache.remove(&possible_block_start).unwrap();
-            let block_len = block.len();
-            let block_offset = pos as usize - possible_block_start as usize;
-            let to_read = min(buf.len(), block_len - block_offset);
-            buf[..to_read].copy_from_slice(&block[block_offset..to_read + block_offset]);
-            self.stats.cache_hits += 1;
-            if discard_read_data {
-                // Now update the cache to remove the area we've just read
-                // Create new block(s) for the areas we haven't yet read
-                if block_offset > 0 {
-                    let block_before = block[..block_offset].to_vec();
-                    self.cache.insert(possible_block_start, block_before);
-                }
-                if to_read + block_offset < block.len() {
-                    let block_after = block[to_read + block_offset..].to_vec();
-                    self.cache.insert(
-                        possible_block_start + block_offset as u64 + to_read as u64,
-                        block_after,
-                    );
-                }
-                self.current_size -= to_read;
-            }
-
-            return Some(to_read);
+        if let Some(block_to_discard) = block_to_discard {
+            self.cache.remove(&block_to_discard);
         }
-        None
-    }
-
-    fn describe_cache(&self) -> String {
-        self.cache
-            .iter()
-            .map(|(k, v)| format!("0x{:x}-0x{:x}", k, k + v.len() as u64))
-            .join(", ")
+        return_value
     }
 }
 
@@ -295,6 +316,13 @@ impl SeekableHttpReaderEngine {
         //     will enter this 'read in progress' block.
         log::info!("Read: requested position 0x{:x}.", pos);
 
+        if pos == self.len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "read beyond end of stream",
+            ));
+        }
+
         // Claim CACHE mutex
         let mut state = self.state.lock().unwrap();
         // Is there block in cache?
@@ -352,10 +380,10 @@ impl SeekableHttpReaderEngine {
         if pos > *reader_pos {
             log::info!("Read: fast-forward from 0x{:x} to 0x{:x}", *reader_pos, pos);
         }
-        while pos > *reader_pos {
-            // Fast forward to the desired position, recording any reads in the cache
+        while pos >= *reader_pos {
+            // Fast forward beyond the desired position, recording any reads in the cache
             // for later.
-            let to_read = min(MAX_BLOCK, pos as usize - *reader_pos as usize);
+            let to_read = min(MAX_BLOCK, self.len as usize - *reader_pos as usize);
             let mut new_block = vec![0u8; to_read];
             reader.read_exact(&mut new_block)?;
             //     claim STATE mutex
@@ -366,35 +394,21 @@ impl SeekableHttpReaderEngine {
             }
             *reader_pos += to_read as u64;
         }
-        // Do the actual read for the data that this thread wants,
-        // and has been waiting so patiently for.
-        let bytes_read = reader.read(buf)?;
-        let old_reader_pos = *reader_pos;
-        *reader_pos += bytes_read as u64;
-        log::info!("Read: have read 0x{:x} bytes", bytes_read);
-
+        // Because the above condition is >=, and because we know the request was not
+        // to read at the very end of the file, we know we now have some data in the
+        // cache which can satisfy the request.
         //     claim STATE mutex
-        {
-            let mut state = self.state.lock().unwrap();
-            if matches!(state.access_pattern, AccessPattern::RandomAccess) {
-                // If we're in a random access seek mode, we expect
-                // repeated reads to this same location may happen, so
-                // store this data for subsequent re-retrieval such that
-                // we don't have to make a whole new HTTP request for it later.
-                if bytes_read > 0 {
-                    state.insert(old_reader_pos, buf[0..bytes_read].to_vec());
-                }
-            }
-            if reader_created {
-                state.stats.num_http_streams += 1;
-            }
-            //     set read not in progress
-            state.read_in_progress = false;
-            //     release STATE mutex
+        let mut state = self.state.lock().unwrap();
+        let bytes_read = state
+            .read_from_cache(pos, buf)
+            .expect("Cache still couldn't satisfy request event after reading beyond read pos");
+        if reader_created {
+            state.stats.num_http_streams += 1;
         }
+        //     set read not in progress
+        state.read_in_progress = false;
+        //     release STATE mutex
         //     release READER mutex
-        //     NOTIFYALL on condvar
-        self.read_completed.notify_all();
         Ok(bytes_read)
     }
 
