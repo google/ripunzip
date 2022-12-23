@@ -128,11 +128,11 @@ fn uri_comparison(c: &mut Criterion, params: &ZipParams, server_type: ServerType
 #[cfg(feature = "real_world_benchmark")]
 fn real_world_uri_comparison(c: &mut Criterion) {
     const URI: &str = "https://chromium-browser-asan.storage.googleapis.com/linux-release/asan-linux-release-970006.zip";
-    let desc = format!("realuri {}", if single_threaded { "st" } else { "mt" });
+    let desc = "realuri";
 
     let ripunzip_path = ripunzip_path();
 
-    let mut group = c.benchmark_group(&desc);
+    let mut group = c.benchmark_group(desc);
     group.bench_function(&format!("{} ripunzip", &desc), |b| {
         b.iter_batched(
             create_output_dir.clone(),
