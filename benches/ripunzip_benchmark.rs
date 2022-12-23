@@ -43,12 +43,8 @@ fn create_output_dir_and_zip_file(
     (output_dir, zip_file)
 }
 
-fn file_comparison(c: &mut Criterion, params: &ZipParams, single_threaded: bool) {
-    let desc = format!(
-        "file {} {}",
-        params,
-        if single_threaded { "st" } else { "mt" }
-    );
+fn file_comparison(c: &mut Criterion, params: &ZipParams) {
+    let desc = format!("file {}", params,);
     let ripunzip_path = std::env::current_exe()
         .unwrap()
         .parent()
@@ -63,11 +59,8 @@ fn file_comparison(c: &mut Criterion, params: &ZipParams, single_threaded: bool)
             || create_output_dir_and_zip_file(params),
             |(output_dir, zip_file)| {
                 let zip_file_path = zip_file.path();
-                let mut cmd = Command::new(&ripunzip_path);
-                if single_threaded {
-                    cmd.arg("--single-threaded");
-                }
-                cmd.arg("-o")
+                Command::new(&ripunzip_path)
+                    .arg("-o")
                     .arg(output_dir.path())
                     .arg("file")
                     .arg(zip_file_path)
@@ -94,18 +87,8 @@ fn file_comparison(c: &mut Criterion, params: &ZipParams, single_threaded: bool)
     });
 }
 
-fn uri_comparison(
-    c: &mut Criterion,
-    params: &ZipParams,
-    single_threaded: bool,
-    server_type: ServerType,
-) {
-    let desc = format!(
-        "uri {} {} {}",
-        server_type,
-        params,
-        if single_threaded { "st" } else { "mt" }
-    );
+fn uri_comparison(c: &mut Criterion, params: &ZipParams, server_type: ServerType) {
+    let desc = format!("uri {} {}", server_type, params,);
 
     let create_output_dir_and_server = move || {
         let output_dir = tempfile::tempdir().unwrap();
@@ -125,7 +108,7 @@ fn uri_comparison(
             create_output_dir_and_server.clone(),
             |(output_dir, server)| {
                 let uri = &server.url("/foo").to_string();
-                fetch_uri_with_ripunzip(uri, output_dir, single_threaded, &ripunzip_path);
+                fetch_uri_with_ripunzip(uri, output_dir, &ripunzip_path);
             },
             criterion::BatchSize::SmallInput,
         )
@@ -143,7 +126,7 @@ fn uri_comparison(
 }
 
 #[cfg(feature = "real_world_benchmark")]
-fn real_world_uri_comparison(c: &mut Criterion, single_threaded: bool) {
+fn real_world_uri_comparison(c: &mut Criterion) {
     const URI: &str = "https://chromium-browser-asan.storage.googleapis.com/linux-release/asan-linux-release-970006.zip";
     let desc = format!("realuri {}", if single_threaded { "st" } else { "mt" });
 
@@ -154,7 +137,7 @@ fn real_world_uri_comparison(c: &mut Criterion, single_threaded: bool) {
         b.iter_batched(
             create_output_dir.clone(),
             |output_dir| {
-                fetch_uri_with_ripunzip(URI, output_dir, single_threaded, &ripunzip_path);
+                fetch_uri_with_ripunzip(URI, output_dir, &ripunzip_path);
             },
             criterion::BatchSize::SmallInput,
         )
@@ -169,19 +152,11 @@ fn real_world_uri_comparison(c: &mut Criterion, single_threaded: bool) {
 }
 
 #[cfg(not(feature = "real_world_benchmark"))]
-fn real_world_uri_comparison(_c: &mut Criterion, _single_threaded: bool) {}
+fn real_world_uri_comparison(_c: &mut Criterion) {}
 
-fn fetch_uri_with_ripunzip(
-    uri: &str,
-    output_dir: TempDir,
-    single_threaded: bool,
-    ripunzip_path: &Path,
-) {
-    let mut cmd = Command::new(&ripunzip_path);
-    if single_threaded {
-        cmd.arg("--single-threaded");
-    }
-    cmd.arg("-o")
+fn fetch_uri_with_ripunzip(uri: &str, output_dir: TempDir, ripunzip_path: &Path) {
+    Command::new(&ripunzip_path)
+        .arg("-o")
         .arg(output_dir.path())
         .arg("uri")
         .arg(uri)
@@ -223,11 +198,11 @@ fn add_benchmarks(c: &mut Criterion) {
         ZipParams::new(FileSizes::Variable, 100, zip::CompressionMethod::Deflated),
         ZipParams::new(FileSizes::Variable, 1000, zip::CompressionMethod::Deflated),
     ];
-    real_world_uri_comparison(c, false);
+    real_world_uri_comparison(c);
     for z in zips_to_test.iter() {
-        file_comparison(c, z, false);
+        file_comparison(c, z);
         for server_type in ServerType::types() {
-            uri_comparison(c, z, false, server_type);
+            uri_comparison(c, z, server_type);
         }
     }
 }
