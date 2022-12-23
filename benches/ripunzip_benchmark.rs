@@ -60,7 +60,7 @@ fn file_comparison(c: &mut Criterion, params: &ZipParams) {
             |(output_dir, zip_file)| {
                 let zip_file_path = zip_file.path();
                 Command::new(&ripunzip_path)
-                    .arg("-o")
+                    .arg("-d")
                     .arg(output_dir.path())
                     .arg("file")
                     .arg(zip_file_path)
@@ -156,7 +156,7 @@ fn real_world_uri_comparison(_c: &mut Criterion) {}
 
 fn fetch_uri_with_ripunzip(uri: &str, output_dir: TempDir, ripunzip_path: &Path) {
     Command::new(&ripunzip_path)
-        .arg("-o")
+        .arg("-d")
         .arg(output_dir.path())
         .arg("uri")
         .arg(uri)
