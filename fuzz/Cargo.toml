@@ -24,7 +24,8 @@ strum = { version = "0.24.1", features = ["derive"] }
 walkdir = "2.3.2"
 itertools = "0.10.5"
 httptest = "0.15"
-ripunzip = { path = "..", features=["fuzzing"]}
+ripunzip = { path = ".." }
+ripunzip_test_utils = { path = "../test_utils" }
 
 [workspace]
 members = ["."]

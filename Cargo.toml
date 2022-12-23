@@ -16,7 +16,7 @@ description = "A tool to unzip an archive in parallel"
 repository = "https://github.com/google/ripunzip"
 
 [features]
-fuzzing = ["dep:httptest", "dep:http", "dep:hyper", "dep:regex"]
+real_world_benchmark = []
 
 [dependencies]
 anyhow = "1.0.66"
@@ -31,18 +31,19 @@ reqwest = { version = "0.11.13", features = ["blocking"] }
 tempfile = "3.3.0"
 thiserror = "1.0.37"
 zip = "0.6.3"
-httptest = { version= "0.15", optional = true }
-http = { version="0.2.8", optional = true }
-hyper = { version="0.14.23", optional = true }
-regex = { version="1.7.0", optional = true }
 
 [dev-dependencies]
 hexdump = "0.1.1"
 httptest = "0.15"
 http = "0.2.8"
 hyper = "0.14.23"
-regex = "1.7.0"
 test-log = "0.2.11"
+criterion = "0.3"
+ripunzip_test_utils = { path = "test_utils" }
+
+[[bench]]
+name = "ripunzip_benchmark"
+harness = false
 
 [lib]
 name = "ripunzip"
@@ -51,3 +52,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "ripunzip"
 path = "src/main.rs"
+
+[workspace]
+members = ["test_utils"]
