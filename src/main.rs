@@ -64,7 +64,7 @@ fn main() -> Result<()> {
                 buf,
                 "{}: {:?}: {}: {}",
                 ts,
-                std::thread::current().id().as_u64(),
+                std::thread::current().id(),
                 buf.default_level_style(record.level())
                     .value(record.level()),
                 record.args()
