@@ -1198,6 +1198,7 @@ name = "ripunzip"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "arbitrary",
  "clap",
  "env_logger",
  "indicatif",

@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{cmp::min, io::Read};
+use std::{cmp::min, io::Read, ops::Range};
 
 use reqwest::blocking::{Client, Response};
 use thiserror::Error;
@@ -74,17 +74,17 @@ impl RangeFetcher {
     /// of the resource but discard bytes before that point. (Clearly that
     /// can be expensive if you only care about a few bytes later in a
     /// resource.)
-    pub(crate) fn fetch_range(&self, offset: u64) -> Result<Response, Error> {
-        log::info!("Fetch range 0x{:x}", offset);
+    pub(crate) fn fetch_range(&self, offset: Range<u64>) -> Result<Response, Error> {
+        log::info!("Fetch range {:?}", offset);
         let mut builder = self.client.get(&self.uri);
         if self.accept_ranges {
-            let range_header = format!("bytes={}-{}", offset, self.len());
+            let range_header = format!("bytes={}-{}", offset.start, offset.end);
             builder = builder.header(reqwest::header::RANGE, range_header);
         }
         let mut response = builder.send().map_err(Error::HttpGet)?;
-        if !self.accept_ranges && offset > 0 {
+        if !self.accept_ranges && offset.start > 0 {
             // Read and discard data prior to 'offset'
-            let mut to_read = offset as usize;
+            let mut to_read = offset.start as usize;
             let mut throwaway = [0u8; 4096];
             while to_read > 0 {
                 let bytes_read = response
@@ -150,13 +150,13 @@ mod tests {
                 .respond_with(status_code(200).body(body))
         });
         assert_eq!(accept_ranges, range_fetcher.accepts_ranges());
-        let mut resp = range_fetcher.fetch_range(0u64).unwrap();
+        let mut resp = range_fetcher.fetch_range(0u64..10u64).unwrap();
         let mut throwaway = [0u8; 10];
         resp.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "0123456789");
 
         // Test read only a range
-        let mut resp = range_fetcher.fetch_range(4u64).unwrap();
+        let mut resp = range_fetcher.fetch_range(4u64..10u64).unwrap();
         let mut throwaway = [0u8; 6];
         resp.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "456789");

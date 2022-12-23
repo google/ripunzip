@@ -14,6 +14,7 @@ use std::{
     borrow::Cow,
     fs::{File, Permissions},
     io::{ErrorKind, Read, Seek},
+    num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -28,6 +29,45 @@ use self::{
     cloneable_seekable_reader::HasLength,
     seekable_http_reader::{AccessPattern, SeekableHttpReader, SeekableHttpReaderEngine},
 };
+
+/// This is how much we read from the underlying HTTP stream in a given thread,
+/// before signalling other threads that they may wish to continue with their
+/// CPU-bound unzipping. Empirically determined.
+/// 128KB = 172ms
+/// 512KB = 187ms
+/// 1024KB = 152ms
+/// 2048KB = 170ms
+/// If we set this too high, we starve multiple threads - they can't start
+/// acting on the data to unzip their files until the read is complete. If we
+/// set this too low, the cache structure (a `BTreeMap`) becomes dominant in
+/// CPU usage.
+const DEFAULT_MAX_BLOCK: usize = 1024 * 1024;
+
+/// We create multiple parallel HTTP streams. Each HTTP stream reads this much
+/// of the end file. If we set this too low, we waste parallelism. If we set
+/// it too high, each HTTP stream takes too long to ramp up based on the TCP
+/// slow start algorithm (or equivalents)
+const DEFAULT_RANGE_PER_READER: u64 = 1024 * 1024 * 1024;
+
+/// Options for downloading from a URI. If in doubt, use the [`Default`]
+/// implementation. These parameters are typically only useful for testing
+/// or fuzzing or performance optimization, though you may wish to set
+/// [`readahead_limit`] to limit RAM consumption.
+#[derive(Default, Debug, Clone)]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
+pub struct UnzipUriOptions {
+    /// Maximum RAM consumption of stored blocks of zip data that are yet
+    /// to be read by the unzip algorithm.
+    pub readahead_limit: Option<usize>,
+    /// How many bytes to read in one go, if we're reading ahead of the
+    /// current zip file request. This is almost never worth tinkering
+    /// with unless you're testing pathological cases.
+    pub max_block: Option<NonZeroUsize>,
+    /// The maximum amount of data to read per HTTP stream.
+    pub range_per_stream: Option<NonZeroU64>,
+    /// The maximum number of parallel HTTP streams to have.
+    pub maximum_streams: Option<NonZeroUsize>,
+}
 
 /// Options for unzipping.
 pub struct UnzipOptions {
@@ -218,11 +258,19 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
         })
     }
 
-    /// Create an unzip engine which knows how to unzip a URI.
+    /// Create an unzip engine which knows how to unzip a URI. This will try
+    /// to download and unzip in parallel, if the HTTP server supports
+    /// the `Range` header.
     /// Parameters:
     /// - the URI
     /// - unzip options
     /// - how big a readahead buffer to create in memory.
+    /// - optionally, a maximum block size to read. This is only useful in
+    ///   testing and fuzzing cases where we want to simulate maximal parallelism
+    ///   even with small zip files. Leave at `None` if in doubt.
+    /// - how large a chunk of the file should be downloaded on each separate
+    ///   HTTP stream. Leave at `None` if in doubt.
+    /// - a maximum number of streams to create
     /// - a progress reporter (set of callbacks)
     /// - an additional callback to warn if performance was impaired by
     ///   rewinding the HTTP stream. (This implies the readahead buffer was
@@ -230,14 +278,23 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
     pub fn for_uri<F: Fn() + 'static>(
         uri: &str,
         options: UnzipOptions,
-        readahead_limit: Option<usize>,
+        uri_options: UnzipUriOptions,
         progress_reporter: P,
         callback_on_rewind: F,
     ) -> Result<Self> {
+        let max_block = uri_options
+            .max_block
+            .unwrap_or_else(|| NonZeroUsize::new(DEFAULT_MAX_BLOCK).unwrap());
+        let range_per_reader = uri_options
+            .range_per_stream
+            .unwrap_or_else(|| NonZeroU64::new(DEFAULT_RANGE_PER_READER).unwrap());
         let seekable_http_reader = SeekableHttpReaderEngine::new(
             uri.to_string(),
-            readahead_limit,
+            uri_options.readahead_limit,
+            uri_options.maximum_streams,
             AccessPattern::RandomAccess,
+            max_block,
+            range_per_reader,
         );
         let (compressed_length, zipfile): (u64, Box<dyn UnzipEngineImpl>) =
             match seekable_http_reader {
@@ -390,7 +447,7 @@ mod tests {
     use test_log::test;
     use zip::{write::FileOptions, ZipWriter};
 
-    use crate::{NullProgressReporter, UnzipEngine, UnzipOptions};
+    use crate::{NullProgressReporter, UnzipEngine, UnzipOptions, UnzipUriOptions};
     use ripunzip_test_utils::*;
 
     fn create_zip_file(path: &Path) {
@@ -484,7 +541,7 @@ mod tests {
         UnzipEngine::for_uri(
             &server.url("/foo").to_string(),
             options,
-            None,
+            UnzipUriOptions::default(),
             NullProgressReporter,
             || {},
         )
@@ -509,7 +566,7 @@ mod tests {
         UnzipEngine::for_uri(
             &server.url("/foo").to_string(),
             options,
-            None,
+            UnzipUriOptions::default(),
             NullProgressReporter,
             || {},
         )
