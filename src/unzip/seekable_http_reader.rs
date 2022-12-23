@@ -332,6 +332,7 @@ impl SeekableHttpReaderEngine {
         // Is there block in cache?
         // - If yes, release CACHE mutex, and return
         if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
+            log::info!("Immediate cache success");
             return Ok(bytes_read_from_cache);
         }
         // - If no, check if read in progress
@@ -342,6 +343,7 @@ impl SeekableHttpReaderEngine {
             state = self.read_completed.wait(state).unwrap();
             //     check cache again
             if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
+                log::info!("Deferred cache success");
                 return Ok(bytes_read_from_cache);
             }
             read_in_progress = state.read_in_progress;
@@ -406,6 +408,7 @@ impl SeekableHttpReaderEngine {
         let bytes_read = state
             .read_from_cache(pos, buf)
             .expect("Cache still couldn't satisfy request event after reading beyond read pos");
+        log::info!("Cache success after read");
         if reader_created {
             state.stats.num_http_streams += 1;
         }

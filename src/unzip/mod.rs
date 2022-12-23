@@ -165,6 +165,7 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
         self.0
             .set_expected_access_pattern(AccessPattern::SequentialIsh);
         let result = if single_threaded {
+            log::info!("ST");
             (0..self.len())
                 .into_iter()
                 .map(|i| {
@@ -179,6 +180,7 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
                 .filter_map(Result::err)
                 .collect()
         } else {
+            log::info!("MT");
             (0..self.len())
                 .into_par_iter()
                 .map(|i| {
@@ -337,6 +339,12 @@ fn extract_file_inner(
     };
     let display_name = name.display().to_string();
     progress_reporter.extraction_starting(&display_name);
+    log::info!(
+        "Start extract of file at {:x}, length {:x}, name {}",
+        file.data_start(),
+        file.compressed_size(),
+        display_name
+    );
     if file.name().ends_with('/') {
         directory_creator.create_dir_all(&out_path)?;
     } else {
@@ -355,6 +363,12 @@ fn extract_file_inner(
                 .with_context(|| "Failed to set permissions")?;
         }
     }
+    log::info!(
+        "Finished extract of file at {:x}, length {:x}, name {}",
+        file.data_start(),
+        file.compressed_size(),
+        display_name
+    );
     progress_reporter.extraction_finished(&display_name);
     Ok(())
 }
