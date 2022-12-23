@@ -509,6 +509,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "getrandom"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c05aeb6a22b8f62540c194aac980f2115af067bfe15a0734d7277a768d396b31"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "wasi",
+]
+
+[[package]]
 name = "h2"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -788,6 +799,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f051f77a7c8e6957c0696eac88f26b0117e54f52d3fc682ab19397a8812846a4"
 
 [[package]]
+name = "lipsum"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8451846f1f337e44486666989fbce40be804da139d5a4477d6b88ece5dc69f4"
+dependencies = [
+ "rand",
+ "rand_chacha",
+]
+
+[[package]]
 name = "log"
 version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -995,6 +1016,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bdd679d533107e090c2704a35982fc06302e30898e63ffa26a81155c012e92"
 
 [[package]]
+name = "ppv-lite86"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
+
+[[package]]
 name = "proc-macro-error"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1037,10 +1064,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+dependencies = [
+ "libc",
+ "rand_chacha",
+ "rand_core",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+dependencies = [
+ "ppv-lite86",
+ "rand_core",
+]
+
+[[package]]
 name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom",
+]
 
 [[package]]
 name = "rayon"
@@ -1149,15 +1200,11 @@ dependencies = [
  "anyhow",
  "clap",
  "env_logger",
- "http",
- "httptest",
- "hyper",
  "indicatif",
  "itertools",
  "log",
  "monitor",
  "rayon",
- "regex",
  "reqwest",
  "tempfile",
  "thiserror",
@@ -1173,9 +1220,26 @@ dependencies = [
  "itertools",
  "libfuzzer-sys",
  "ripunzip",
+ "ripunzip_test_utils",
  "strum",
  "tempfile",
  "walkdir",
+ "zip",
+]
+
+[[package]]
+name = "ripunzip_test_utils"
+version = "0.0.1"
+dependencies = [
+ "arbitrary",
+ "http",
+ "httptest",
+ "hyper",
+ "lipsum",
+ "log",
+ "once_cell",
+ "regex",
+ "strum",
  "zip",
 ]
 
