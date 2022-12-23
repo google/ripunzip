@@ -22,7 +22,7 @@ struct Args {
 
     /// The output directory into which to place the files. By default, the
     /// current working directory is used.
-    #[arg(short, long, value_name = "DIRECTORY")]
+    #[arg(short = 'd', long, value_name = "DIRECTORY")]
     output_directory: Option<PathBuf>,
 
     /// Whether to decompress on a single thread. By default,
