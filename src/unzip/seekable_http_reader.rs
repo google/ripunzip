@@ -214,7 +214,9 @@ struct ReadingMaterials {
 /// A type which can produce objects that can be [`Read`] and [`Seek`] even
 /// though they're accessing remote HTTP resources. This object in itself doesn't
 /// support those traits, but its [`create_reader`] method can be used to emit
-/// objects that do.
+/// objects that do. This object can only be used to access HTTP resources which
+/// support the `Range` header - an error will be reported on construction
+/// of this object if such ranges are not supported by the remote server.
 pub(crate) struct SeekableHttpReaderEngine {
     /// Total stream length
     len: u64,
@@ -246,7 +248,9 @@ pub(crate) struct SeekableHttpReaderStatistics {
 }
 
 impl SeekableHttpReaderEngine {
-    /// Create a new seekable HTTP reader engine for this URI.
+    /// Create a new seekable HTTP reader engine for this URI. This constructor
+    /// will query the server to discover whether it supports HTTP ranges;
+    /// if not, an error will be returned.
     pub(crate) fn new(
         uri: String,
         readahead_limit: Option<usize>,
@@ -284,13 +288,13 @@ impl SeekableHttpReaderEngine {
         // a) Allow exactly one thread to be reading on the underlying HTTP stream;
         // b) Allow other threads to query the cache of already-read blocks
         //    without blocking on ongoing reads on the stream.
-        // We therefore need two mutes - one for the cache (and, our state in
+        // We therefore need two mutexes - one for the cache (and, our state in
         // general) and another for the actual HTTP stream reader.
         // There is a risk of deadlock between these mutexes, since to do
         // an actual read we will need to release the state mutex to allow
         // others to do the reads. We avoid this by ensuring only a single
         // thread ever has permission to do anything with the reader mutex.
-        // Plan:
+        // Specifically:
         // Claim STATE mutex
         // Is there block in cache?
         // - If yes, release STATE mutex, and return
@@ -351,6 +355,7 @@ impl SeekableHttpReaderEngine {
         //     release STATE mutex
         drop(state);
         //     perform read
+        // First check if we need to rewind.
         if let Some((_, readerpos)) = reading_stuff.reader.as_ref() {
             if pos < *readerpos {
                 log::info!(
@@ -387,11 +392,10 @@ impl SeekableHttpReaderEngine {
             let mut new_block = vec![0u8; to_read];
             reader.read_exact(&mut new_block)?;
             //     claim STATE mutex
-            {
-                let mut state = self.state.lock().unwrap();
-                state.insert(*reader_pos, new_block);
-                self.read_completed.notify_all();
-            }
+            let mut state = self.state.lock().unwrap();
+            state.insert(*reader_pos, new_block);
+            // Tell any waiting threads they should re-check the cache
+            self.read_completed.notify_all();
             *reader_pos += to_read as u64;
         }
         // Because the above condition is >=, and because we know the request was not

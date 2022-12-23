@@ -75,7 +75,6 @@ pub struct UnzipEngine<P: UnzipProgressReporter> {
 
 /// The underlying engine used by the unzipper. This is different
 /// for files and URIs.
-
 trait UnzipEngineImpl {
     fn len(&self) -> usize;
     fn by_index_raw(&mut self, i: usize) -> ZipResult<ZipFile<'_>>;
@@ -138,7 +137,8 @@ impl UnzipEngineImpl for UnzipFileEngine {
     }
 }
 
-/// Engine which knows how to unzip a URI.
+/// Engine which knows how to unzip a URI; specifically a URI fetched from
+/// an HTTP server which supports `Range` requests.
 #[derive(Clone)]
 struct UnzipUriEngine<F: Fn()>(
     Arc<SeekableHttpReaderEngine>,
@@ -250,6 +250,9 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
                     )),
                 ),
                 Err(_) => {
+                    // This server probably doesn't support HTTP ranges.
+                    // Let's fall back to fetching the request into a temporary
+                    // file then unzipping.
                     let mut response = reqwest::blocking::get(uri)?;
                     let mut tempfile = tempfile::tempfile()?;
                     std::io::copy(&mut response, &mut tempfile)?;
@@ -280,6 +283,7 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
     pub fn zip_length(&self) -> u64 {
         self.compressed_length
     }
+
     /// Perform the unzip.
     pub fn unzip(mut self) -> Result<()> {
         log::info!("Starting extract");
