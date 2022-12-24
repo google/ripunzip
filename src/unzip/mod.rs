@@ -121,7 +121,7 @@ impl UnzipEngineImpl for UnzipFileEngine {
                 .collect()
         } else {
             (0..self.len())
-                .into_par_iter()
+                .par_bridge()
                 .map(|i| {
                     extract_file(
                         &mut self.0.clone(),
