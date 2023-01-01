@@ -20,7 +20,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
-use zip::{read::ZipFile, result::ZipResult, ZipArchive};
+use zip::{read::ZipFile, ZipArchive};
 
 use crate::unzip::cloneable_seekable_reader::CloneableSeekableReader;
 
@@ -77,7 +77,6 @@ pub struct UnzipEngine<P: UnzipProgressReporter> {
 /// for files and URIs.
 trait UnzipEngineImpl {
     fn len(&self) -> usize;
-    fn by_index_raw(&mut self, i: usize) -> ZipResult<ZipFile<'_>>;
     fn unzip(
         &mut self,
         single_threaded: bool,
@@ -95,9 +94,7 @@ impl UnzipEngineImpl for UnzipFileEngine {
     fn len(&self) -> usize {
         self.0.len()
     }
-    fn by_index_raw(&mut self, i: usize) -> ZipResult<ZipFile<'_>> {
-        self.0.by_index_raw(i)
-    }
+
     fn unzip(
         &mut self,
         single_threaded: bool,
@@ -149,10 +146,6 @@ struct UnzipUriEngine<F: Fn()>(
 impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
     fn len(&self) -> usize {
         self.1.len()
-    }
-
-    fn by_index_raw(&mut self, i: usize) -> ZipResult<ZipFile<'_>> {
-        self.1.by_index_raw(i)
     }
 
     fn unzip(
