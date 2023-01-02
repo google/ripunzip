@@ -76,7 +76,6 @@ pub struct UnzipEngine<P: UnzipProgressReporter> {
 /// The underlying engine used by the unzipper. This is different
 /// for files and URIs.
 trait UnzipEngineImpl {
-    fn len(&self) -> usize;
     fn unzip(
         &mut self,
         single_threaded: bool,
@@ -91,10 +90,6 @@ trait UnzipEngineImpl {
 struct UnzipFileEngine(ZipArchive<CloneableSeekableReader<File>>);
 
 impl UnzipEngineImpl for UnzipFileEngine {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
     fn unzip(
         &mut self,
         single_threaded: bool,
@@ -103,7 +98,7 @@ impl UnzipEngineImpl for UnzipFileEngine {
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         unzip_serial_or_parallel(
-            self.len(),
+            self.0.len(),
             single_threaded,
             output_directory,
             progress_reporter,
@@ -123,10 +118,6 @@ struct UnzipUriEngine<F: Fn()>(
 );
 
 impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
-    fn len(&self) -> usize {
-        self.1.len()
-    }
-
     fn unzip(
         &mut self,
         single_threaded: bool,
@@ -137,7 +128,7 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
         self.0
             .set_expected_access_pattern(AccessPattern::SequentialIsh);
         let result = unzip_serial_or_parallel(
-            self.len(),
+            self.1.len(),
             single_threaded,
             output_directory,
             progress_reporter,
@@ -222,11 +213,6 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
             compressed_length,
             directory_creator: DirectoryCreator::default(),
         })
-    }
-
-    /// The total number of files we expect to unzip.
-    pub fn file_count(&self) -> usize {
-        self.zipfile.len()
     }
 
     /// The total compressed length that we expect to retrieve over
