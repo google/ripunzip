@@ -26,6 +26,7 @@ indicatif = "0.17.2"
 itertools = "0.10.5"
 log = "0.4.17"
 monitor = "0.1.0"
+progress-streams = "1.1.0"
 rayon = "1.6.0"
 reqwest = { version = "0.11.13", features = ["blocking"] }
 tempfile = "3.3.0"
