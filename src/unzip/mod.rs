@@ -102,35 +102,14 @@ impl UnzipEngineImpl for UnzipFileEngine {
         progress_reporter: &(dyn UnzipProgressReporter + Sync),
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
-        if single_threaded {
-            (0..self.len())
-                .into_iter()
-                .map(|i| {
-                    extract_file(
-                        &mut self.0,
-                        i,
-                        output_directory,
-                        progress_reporter,
-                        directory_creator,
-                    )
-                })
-                .filter_map(Result::err)
-                .collect()
-        } else {
-            (0..self.len())
-                .into_par_iter()
-                .map(|i| {
-                    extract_file(
-                        &mut self.0.clone(),
-                        i,
-                        output_directory,
-                        progress_reporter,
-                        directory_creator,
-                    )
-                })
-                .filter_map(Result::err)
-                .collect()
-        }
+        unzip_serial_or_parallel(
+            self.len(),
+            single_threaded,
+            output_directory,
+            progress_reporter,
+            directory_creator,
+            || self.0.clone(),
+        )
     }
 }
 
@@ -157,37 +136,14 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
     ) -> Vec<anyhow::Error> {
         self.0
             .set_expected_access_pattern(AccessPattern::SequentialIsh);
-        let result = if single_threaded {
-            log::info!("ST");
-            (0..self.len())
-                .into_iter()
-                .map(|i| {
-                    extract_file(
-                        &mut self.1,
-                        i,
-                        output_directory,
-                        progress_reporter,
-                        directory_creator,
-                    )
-                })
-                .filter_map(Result::err)
-                .collect()
-        } else {
-            log::info!("MT");
-            (0..self.len())
-                .into_par_iter()
-                .map(|i| {
-                    extract_file(
-                        &mut self.1.clone(),
-                        i,
-                        output_directory,
-                        progress_reporter,
-                        directory_creator,
-                    )
-                })
-                .filter_map(Result::err)
-                .collect()
-        };
+        let result = unzip_serial_or_parallel(
+            self.len(),
+            single_threaded,
+            output_directory,
+            progress_reporter,
+            directory_creator,
+            || self.1.clone(),
+        );
         let stats = self.0.get_stats();
         if stats.cache_shrinks > 0 {
             self.2()
@@ -294,6 +250,48 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
         );
         // Return the first error code, if any.
         errors.into_iter().next().map(Result::Err).unwrap_or(Ok(()))
+    }
+}
+
+fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
+    len: usize,
+    single_threaded: bool,
+    output_directory: &Option<PathBuf>,
+    progress_reporter: &dyn UnzipProgressReporter,
+    directory_creator: &DirectoryCreator,
+    get_ziparchive_clone: impl Fn() -> ZipArchive<T> + Sync,
+) -> Vec<anyhow::Error> {
+    if single_threaded {
+        (0..len)
+            .into_iter()
+            .map(|i| {
+                extract_file(
+                    // We theoretically don't need to clone in this case but it
+                    // more easily allows us to extract this common code from the
+                    // file and URI case.
+                    &mut get_ziparchive_clone(),
+                    i,
+                    output_directory,
+                    progress_reporter,
+                    directory_creator,
+                )
+            })
+            .filter_map(Result::err)
+            .collect()
+    } else {
+        (0..len)
+            .into_par_iter()
+            .map(|i| {
+                extract_file(
+                    &mut get_ziparchive_clone(),
+                    i,
+                    output_directory,
+                    progress_reporter,
+                    directory_creator,
+                )
+            })
+            .filter_map(Result::err)
+            .collect()
     }
 }
 
