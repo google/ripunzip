@@ -8,6 +8,7 @@
 
 mod cloneable_seekable_reader;
 mod http_range_reader;
+mod progress_updater;
 mod seekable_http_reader;
 
 use std::{
@@ -22,7 +23,9 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use zip::{read::ZipFile, ZipArchive};
 
-use crate::unzip::cloneable_seekable_reader::CloneableSeekableReader;
+use crate::unzip::{
+    cloneable_seekable_reader::CloneableSeekableReader, progress_updater::ProgressUpdater,
+};
 
 use self::{
     cloneable_seekable_reader::HasLength,
@@ -328,7 +331,7 @@ fn extract_file_inner(
         if let Some(parent) = out_path.parent() {
             directory_creator.create_dir_all(parent)?;
         }
-        let mut out_file = File::create(&out_path).with_context(|| "Failed to create file")?;
+        let out_file = File::create(&out_path).with_context(|| "Failed to create file")?;
         // Progress bar strategy. The overall progress across the entire zip file must be
         // denoted in terms of *compressed* bytes, since at the outset we don't know the uncompressed
         // size of each file. Yet, within a given file, we update progress based on the bytes
@@ -337,27 +340,19 @@ fn extract_file_inner(
         // data, and the remainder.
         let uncompressed_size = file.size();
         let compressed_size = file.compressed_size();
-        let number_of_1mb_updates = uncompressed_size / (1024 * 1024);
-        if number_of_1mb_updates > 0 {
-            let compressed_bytes_per_1mb_update = compressed_size / number_of_1mb_updates;
-            let remainder = compressed_size % number_of_1mb_updates;
-            let mut uncompressed_progress = 0usize;
-            let mut one_mb_updates_given = 0usize;
-            let mut out_file = progress_streams::ProgressWriter::new(out_file, |bytes_written| {
-                uncompressed_progress += bytes_written;
-                let one_mb_updates_due = uncompressed_progress / (1024 * 1024);
-                if one_mb_updates_due > one_mb_updates_given {
-                    progress_reporter.bytes_extracted(compressed_bytes_per_1mb_update);
-                    one_mb_updates_given += 1;
-                }
-            });
-            std::io::copy(&mut file, &mut out_file).with_context(|| "Failed to write directory")?;
-            progress_reporter.bytes_extracted(remainder);
-        } else {
-            // Small file
-            std::io::copy(&mut file, &mut out_file).with_context(|| "Failed to write directory")?;
-            progress_reporter.bytes_extracted(compressed_size);
-        }
+        let mut progress_updater = ProgressUpdater::new(
+            |external_progress| {
+                progress_reporter.bytes_extracted(external_progress);
+            },
+            compressed_size,
+            uncompressed_size,
+            1024 * 1024,
+        );
+        let mut out_file = progress_streams::ProgressWriter::new(out_file, |bytes_written| {
+            progress_updater.progress(bytes_written as u64)
+        });
+        std::io::copy(&mut file, &mut out_file).with_context(|| "Failed to write directory")?;
+        progress_updater.finish();
     }
     #[cfg(unix)]
     {
