@@ -42,10 +42,6 @@ impl<F: Fn(u64)> ProgressUpdater<F> {
                 external_total % total_updates_expected,
             )
         };
-        eprintln!(
-            "TUE = {}, UEA = {}, RE = {}",
-            total_updates_expected, update_external_amount, remainder_external
-        );
         Self {
             callback,
             internal_progress: 0u64,
@@ -71,10 +67,6 @@ impl<F: Fn(u64)> ProgressUpdater<F> {
         } else {
             self.internal_progress / self.per_update_internal
         };
-        eprintln!(
-            "UDD: {} based on {} / {}",
-            updates_due, self.internal_progress, self.per_update_internal
-        );
         while updates_due > self.external_updates_sent {
             (self.callback)(self.update_external_amount);
             self.external_updates_sent += 1;
