@@ -6,6 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![forbid(unsafe_code)]
+
 use std::{fmt::Write, fs::File, path::PathBuf};
 
 use anyhow::Result;
