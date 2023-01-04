@@ -65,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: hecrj/setup-rust-action@v1
-        run: cargo install cargo-deb # sadly not supported by dtolnay/install
+      - run: cargo install cargo-deb # sadly not supported by dtolnay/install
       - name: BuildDeb
         run: cargo deb
       - name: Upload Deb Artifact
