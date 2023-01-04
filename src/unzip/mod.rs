@@ -13,7 +13,7 @@ mod seekable_http_reader;
 
 use std::{
     borrow::Cow,
-    fs::{File, Permissions},
+    fs::File,
     io::{ErrorKind, Read, Seek},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -367,7 +367,7 @@ fn extract_file_inner(
     {
         use std::os::unix::fs::PermissionsExt;
         if let Some(mode) = file.unix_mode() {
-            std::fs::set_permissions(&out_path, Permissions::from_mode(mode))
+            std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))
                 .with_context(|| "Failed to set permissions")?;
         }
     }
