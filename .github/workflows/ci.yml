@@ -107,3 +107,18 @@ jobs:
             cargo rustdoc --color always -p "$package" -- -D warnings
           done
         env: { RUSTDOCFLAGS: -Dwarnings }
+
+  # Package as a .deb
+  debbuild:
+    name: Amd64Deb
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+    - uses: actions/checkout@v2
+    - name: BuildDeb
+      uses: ebbflow-io/cargo-deb-amd64-ubuntu@1.0
+    - name: Upload Deb Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: amd64deb
+        path: ./target/x86_64-unknown-linux-musl/debian/*
