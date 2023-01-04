@@ -268,8 +268,15 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
             .filter_map(Result::err)
             .collect()
     } else {
+        // We use par_bridge here rather than into_par_iter because it turns
+        // out to better preserve ordering of the IDs in the input range,
+        // i.e. we're more likely to ask our initial threads to act upon
+        // file IDs 0, 1, 2, 3, 4, 5 rather than 0, 1000, 2000, 3000 etc.
+        // On a device which is CPU-bound or IO-bound (rather than network
+        // bound) that's beneficial because we can start to decompress
+        // and write data to disk as soon as it arrives from the network.
         (0..len)
-            .into_par_iter()
+            .par_bridge()
             .map(|i| {
                 extract_file(
                     &mut get_ziparchive_clone(),
