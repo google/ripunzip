@@ -55,7 +55,22 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    env_logger::init();
+    use std::io::Write;
+
+    env_logger::builder()
+        .format(|buf, record| {
+            let ts = buf.timestamp_micros();
+            writeln!(
+                buf,
+                "{}: {:?}: {}: {}",
+                ts,
+                std::thread::current().id(),
+                buf.default_level_style(record.level())
+                    .value(record.level()),
+                record.args()
+            )
+        })
+        .init();
     let args = Args::parse();
     let options = UnzipOptions {
         output_directory: args.output_directory,

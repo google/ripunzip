@@ -8,6 +8,7 @@
 
 mod cloneable_seekable_reader;
 mod http_range_reader;
+mod progress_updater;
 mod seekable_http_reader;
 
 use std::{
@@ -20,9 +21,11 @@ use std::{
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
-use zip::{read::ZipFile, result::ZipResult, ZipArchive};
+use zip::{read::ZipFile, ZipArchive};
 
-use crate::unzip::cloneable_seekable_reader::CloneableSeekableReader;
+use crate::unzip::{
+    cloneable_seekable_reader::CloneableSeekableReader, progress_updater::ProgressUpdater,
+};
 
 use self::{
     cloneable_seekable_reader::HasLength,
@@ -76,8 +79,6 @@ pub struct UnzipEngine<P: UnzipProgressReporter> {
 /// The underlying engine used by the unzipper. This is different
 /// for files and URIs.
 trait UnzipEngineImpl {
-    fn len(&self) -> usize;
-    fn by_index_raw(&mut self, i: usize) -> ZipResult<ZipFile<'_>>;
     fn unzip(
         &mut self,
         single_threaded: bool,
@@ -92,12 +93,6 @@ trait UnzipEngineImpl {
 struct UnzipFileEngine(ZipArchive<CloneableSeekableReader<File>>);
 
 impl UnzipEngineImpl for UnzipFileEngine {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-    fn by_index_raw(&mut self, i: usize) -> ZipResult<ZipFile<'_>> {
-        self.0.by_index_raw(i)
-    }
     fn unzip(
         &mut self,
         single_threaded: bool,
@@ -105,35 +100,14 @@ impl UnzipEngineImpl for UnzipFileEngine {
         progress_reporter: &(dyn UnzipProgressReporter + Sync),
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
-        if single_threaded {
-            (0..self.len())
-                .into_iter()
-                .map(|i| {
-                    extract_file(
-                        &mut self.0,
-                        i,
-                        output_directory,
-                        progress_reporter,
-                        directory_creator,
-                    )
-                })
-                .filter_map(Result::err)
-                .collect()
-        } else {
-            (0..self.len())
-                .into_par_iter()
-                .map(|i| {
-                    extract_file(
-                        &mut self.0.clone(),
-                        i,
-                        output_directory,
-                        progress_reporter,
-                        directory_creator,
-                    )
-                })
-                .filter_map(Result::err)
-                .collect()
-        }
+        unzip_serial_or_parallel(
+            self.0.len(),
+            single_threaded,
+            output_directory,
+            progress_reporter,
+            directory_creator,
+            || self.0.clone(),
+        )
     }
 }
 
@@ -147,14 +121,6 @@ struct UnzipUriEngine<F: Fn()>(
 );
 
 impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
-    fn len(&self) -> usize {
-        self.1.len()
-    }
-
-    fn by_index_raw(&mut self, i: usize) -> ZipResult<ZipFile<'_>> {
-        self.1.by_index_raw(i)
-    }
-
     fn unzip(
         &mut self,
         single_threaded: bool,
@@ -164,35 +130,14 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
     ) -> Vec<anyhow::Error> {
         self.0
             .set_expected_access_pattern(AccessPattern::SequentialIsh);
-        let result = if single_threaded {
-            (0..self.len())
-                .into_iter()
-                .map(|i| {
-                    extract_file(
-                        &mut self.1,
-                        i,
-                        output_directory,
-                        progress_reporter,
-                        directory_creator,
-                    )
-                })
-                .filter_map(Result::err)
-                .collect()
-        } else {
-            (0..self.len())
-                .into_par_iter()
-                .map(|i| {
-                    extract_file(
-                        &mut self.1.clone(),
-                        i,
-                        output_directory,
-                        progress_reporter,
-                        directory_creator,
-                    )
-                })
-                .filter_map(Result::err)
-                .collect()
-        };
+        let result = unzip_serial_or_parallel(
+            self.1.len(),
+            single_threaded,
+            output_directory,
+            progress_reporter,
+            directory_creator,
+            || self.1.clone(),
+        );
         let stats = self.0.get_stats();
         if stats.cache_shrinks > 0 {
             self.2()
@@ -273,11 +218,6 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
         })
     }
 
-    /// The total number of files we expect to unzip.
-    pub fn file_count(&self) -> usize {
-        self.zipfile.len()
-    }
-
     /// The total compressed length that we expect to retrieve over
     /// the network or from the compressed file.
     pub fn zip_length(&self) -> u64 {
@@ -299,6 +239,48 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
         );
         // Return the first error code, if any.
         errors.into_iter().next().map(Result::Err).unwrap_or(Ok(()))
+    }
+}
+
+fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
+    len: usize,
+    single_threaded: bool,
+    output_directory: &Option<PathBuf>,
+    progress_reporter: &dyn UnzipProgressReporter,
+    directory_creator: &DirectoryCreator,
+    get_ziparchive_clone: impl Fn() -> ZipArchive<T> + Sync,
+) -> Vec<anyhow::Error> {
+    if single_threaded {
+        (0..len)
+            .into_iter()
+            .map(|i| {
+                extract_file(
+                    // We theoretically don't need to clone in this case but it
+                    // more easily allows us to extract this common code from the
+                    // file and URI case.
+                    &mut get_ziparchive_clone(),
+                    i,
+                    output_directory,
+                    progress_reporter,
+                    directory_creator,
+                )
+            })
+            .filter_map(Result::err)
+            .collect()
+    } else {
+        (0..len)
+            .into_par_iter()
+            .map(|i| {
+                extract_file(
+                    &mut get_ziparchive_clone(),
+                    i,
+                    output_directory,
+                    progress_reporter,
+                    directory_creator,
+                )
+            })
+            .filter_map(Result::err)
+            .collect()
     }
 }
 
@@ -337,15 +319,40 @@ fn extract_file_inner(
     };
     let display_name = name.display().to_string();
     progress_reporter.extraction_starting(&display_name);
+    log::info!(
+        "Start extract of file at {:x}, length {:x}, name {}",
+        file.data_start(),
+        file.compressed_size(),
+        display_name
+    );
     if file.name().ends_with('/') {
         directory_creator.create_dir_all(&out_path)?;
     } else {
         if let Some(parent) = out_path.parent() {
             directory_creator.create_dir_all(parent)?;
         }
-        let mut out_file = File::create(&out_path).with_context(|| "Failed to create file")?;
+        let out_file = File::create(&out_path).with_context(|| "Failed to create file")?;
+        // Progress bar strategy. The overall progress across the entire zip file must be
+        // denoted in terms of *compressed* bytes, since at the outset we don't know the uncompressed
+        // size of each file. Yet, within a given file, we update progress based on the bytes
+        // of uncompressed data written, once per 1MB, because that's the information that we happen
+        // to have available. So, calculate how many compressed bytes relate to 1MB of uncompressed
+        // data, and the remainder.
+        let uncompressed_size = file.size();
+        let compressed_size = file.compressed_size();
+        let mut progress_updater = ProgressUpdater::new(
+            |external_progress| {
+                progress_reporter.bytes_extracted(external_progress);
+            },
+            compressed_size,
+            uncompressed_size,
+            1024 * 1024,
+        );
+        let mut out_file = progress_streams::ProgressWriter::new(out_file, |bytes_written| {
+            progress_updater.progress(bytes_written as u64)
+        });
         std::io::copy(&mut file, &mut out_file).with_context(|| "Failed to write directory")?;
-        progress_reporter.bytes_extracted(file.compressed_size());
+        progress_updater.finish();
     }
     #[cfg(unix)]
     {
@@ -355,6 +362,12 @@ fn extract_file_inner(
                 .with_context(|| "Failed to set permissions")?;
         }
     }
+    log::info!(
+        "Finished extract of file at {:x}, length {:x}, name {}",
+        file.data_start(),
+        file.compressed_size(),
+        display_name
+    );
     progress_reporter.extraction_finished(&display_name);
     Ok(())
 }

@@ -20,15 +20,7 @@ rm -Rf /tmp/testb
 mkdir /tmp/testb
 pushd /tmp/testb
 echo ripunzip:
-time sh -c "$MYDIR/target/release/ripunzip uri \"$URI\" > /dev/null"
+time sh -c "$MYDIR/target/release/ripunzip uri \"$URI\" "
 popd
 rm -Rf /tmp/testb
 
-rm -Rf /tmp/testa
-mkdir /tmp/testa
-pushd /tmp/testa
-echo unzip:
-time sh -c "curl -o zipfile.zip \"$URI\" > /dev/null"
-time sh -c "unzip zipfile.zip > /dev/null"
-popd
-rm -Rf /tmp/testa

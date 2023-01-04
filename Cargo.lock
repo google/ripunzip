@@ -1217,6 +1217,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "progress-streams"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e965d96c8162c607b0cd8d66047ad3c9fd35273c134d994327882c6e47f986a7"
+
+[[package]]
 name = "quote"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1372,6 +1378,7 @@ dependencies = [
  "itertools 0.10.5",
  "log",
  "monitor",
+ "progress-streams",
  "rayon",
  "reqwest",
  "ripunzip_test_utils",
