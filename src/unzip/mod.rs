@@ -358,6 +358,8 @@ fn extract_file_inner(
         let mut out_file = progress_streams::ProgressWriter::new(out_file, |bytes_written| {
             progress_updater.progress(bytes_written as u64)
         });
+        // Using a BufWriter here doesn't improve performance even on a VM with
+        // spinny disks.
         std::io::copy(&mut file, &mut out_file).with_context(|| "Failed to write directory")?;
         progress_updater.finish();
     }
