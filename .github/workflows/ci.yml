@@ -67,7 +67,7 @@ jobs:
         if: matrix.os == '' && matrix.rust == 'stable'
         with:
           name: amd64deb
-          path: ./target/x86_64-unknown-linux-musl/debian/*
+          path: ./target/debian/*
 
   # Clippy check
   clippy:
