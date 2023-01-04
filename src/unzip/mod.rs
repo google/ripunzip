@@ -50,7 +50,7 @@ pub trait UnzipProgressReporter: Sync {
     fn total_bytes_expected(&self, _expected: u64) {}
     /// Some bytes of a file have been decompressed. This is probably
     /// the best way to display an overall progress bar. This should eventually
-    /// add up to the number you're given using [`total_bytes_expected`].
+    /// add up to the number you're given using `total_bytes_expected`.
     /// The 'count' parameter is _not_ a running total - you must add up
     /// each call to this function into the running total.
     /// It's a bit unfortunate that we give compressed bytes rather than
