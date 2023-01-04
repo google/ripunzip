@@ -12,6 +12,7 @@ version = "0.3.0"
 edition = "2021"
 authors = ["Adrian Taylor <adetaylor@chromium.org>"]
 license = "MIT OR Apache-2.0"
+readme = "README.md"
 description = "A tool to unzip an archive in parallel"
 repository = "https://github.com/google/ripunzip"
 
