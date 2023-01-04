@@ -13,7 +13,7 @@ mod seekable_http_reader;
 
 use std::{
     borrow::Cow,
-    fs::{File, Permissions},
+    fs::File,
     io::{ErrorKind, Read, Seek},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -50,7 +50,7 @@ pub trait UnzipProgressReporter: Sync {
     fn total_bytes_expected(&self, _expected: u64) {}
     /// Some bytes of a file have been decompressed. This is probably
     /// the best way to display an overall progress bar. This should eventually
-    /// add up to the number you're given using [`total_bytes_expected`].
+    /// add up to the number you're given using `total_bytes_expected`.
     /// The 'count' parameter is _not_ a running total - you must add up
     /// each call to this function into the running total.
     /// It's a bit unfortunate that we give compressed bytes rather than
@@ -358,6 +358,8 @@ fn extract_file_inner(
         let mut out_file = progress_streams::ProgressWriter::new(out_file, |bytes_written| {
             progress_updater.progress(bytes_written as u64)
         });
+        // Using a BufWriter here doesn't improve performance even on a VM with
+        // spinny disks.
         std::io::copy(&mut file, &mut out_file).with_context(|| "Failed to write directory")?;
         progress_updater.finish();
     }
@@ -365,7 +367,7 @@ fn extract_file_inner(
     {
         use std::os::unix::fs::PermissionsExt;
         if let Some(mode) = file.unix_mode() {
-            std::fs::set_permissions(&out_path, Permissions::from_mode(mode))
+            std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))
                 .with_context(|| "Failed to set permissions")?;
         }
     }
