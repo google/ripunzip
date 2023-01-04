@@ -55,16 +55,21 @@ jobs:
       - name: Install dependencies on Linux
         if: matrix.os == ''
         run: sudo apt-get install libssl-dev pkg-config
-      - name: Install Rust dependencies on Linux
-        if: matrix.os == ''
-        run: cargo install cargo-deb
       - run: cargo test --workspace ${{steps.testsuite.outputs.exclude}}
+
+  deb:
+    name: BuildDeb
+    runs-on: ubuntu-20.04
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v2
+      - uses: hecrj/setup-rust-action@v1
+      - run: cargo install cargo-deb # sadly not supported by dtolnay/install
       - name: BuildDeb
-        if: matrix.os == '' && matrix.rust == 'stable'
         run: cargo deb
       - name: Upload Deb Artifact
         uses: actions/upload-artifact@v2
-        if: matrix.os == '' && matrix.rust == 'stable'
         with:
           name: amd64deb
           path: ./target/debian/*.deb
@@ -91,7 +96,9 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v2
-      - uses: dtolnay/install@cargo-outdated
+      - uses: dtolnay/install@master
+        with:
+          crate: cargo-outdated
       - run: cargo outdated -R -w
 
   # Check rustfmt is good
