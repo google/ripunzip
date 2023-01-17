@@ -20,7 +20,7 @@ linked above.
 
 #### Development
 
-Pull requests are accepted (see [the contributing doc](docs/contributing.md). The focus
+Pull requests are welcome - see [the contributing doc](docs/contributing.md). The focus
 of this project remains efficiently unzipping entire zip files, and any speed increases
 are greatly appreciated! `cargo criterion` is used for performance testing, though the
 benchmark suite doesn't do a great job of simulating real conditions. In particular please
