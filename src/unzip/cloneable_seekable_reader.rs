@@ -145,11 +145,11 @@ mod test {
         assert!(reader.read_exact(&mut out).is_ok());
         assert_eq!(out[0], 0);
         assert_eq!(out[1], 1);
-        assert!(reader.seek(SeekFrom::Start(0)).is_ok());
+        assert!(reader.rewind().is_ok());
         assert!(reader.read_exact(&mut out).is_ok());
         assert_eq!(out[0], 0);
         assert_eq!(out[1], 1);
-        assert!(reader.seek(SeekFrom::Current(0)).is_ok());
+        assert!(reader.stream_position().is_ok());
         assert!(reader.read_exact(&mut out).is_ok());
         assert_eq!(out[0], 2);
         assert_eq!(out[1], 3);

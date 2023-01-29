@@ -111,7 +111,7 @@ impl ProgressDisplayer {
 
 impl UnzipProgressReporter for ProgressDisplayer {
     fn extraction_starting(&self, display_name: &str) {
-        self.0.set_message(format!("Extracting {}", display_name))
+        self.0.set_message(format!("Extracting {display_name}"))
     }
 
     fn total_bytes_expected(&self, expected: u64) {

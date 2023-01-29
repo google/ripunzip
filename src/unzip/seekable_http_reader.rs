@@ -580,10 +580,10 @@ mod tests {
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "0123");
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "4567");
-        seekable_http_reader.seek(SeekFrom::Current(0)).unwrap();
+        seekable_http_reader.stream_position().unwrap();
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "89AB");
-        seekable_http_reader.seek(SeekFrom::Start(0)).unwrap();
+        seekable_http_reader.rewind().unwrap();
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "0123");
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
