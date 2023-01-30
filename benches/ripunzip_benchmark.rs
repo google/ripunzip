@@ -44,7 +44,7 @@ fn create_output_dir_and_zip_file(
 }
 
 fn file_comparison(c: &mut Criterion, params: &ZipParams) {
-    let desc = format!("file {}", params,);
+    let desc = format!("file {params}",);
     let ripunzip_path = std::env::current_exe()
         .unwrap()
         .parent()
@@ -88,7 +88,7 @@ fn file_comparison(c: &mut Criterion, params: &ZipParams) {
 }
 
 fn uri_comparison(c: &mut Criterion, params: &ZipParams, server_type: ServerType) {
-    let desc = format!("uri {} {}", server_type, params,);
+    let desc = format!("uri {server_type} {params}",);
 
     let create_output_dir_and_server = move || {
         let output_dir = tempfile::tempdir().unwrap();
@@ -105,7 +105,7 @@ fn uri_comparison(c: &mut Criterion, params: &ZipParams, server_type: ServerType
     let mut group = c.benchmark_group(&desc);
     group.bench_function(&format!("{} ripunzip", &desc), |b| {
         b.iter_batched(
-            create_output_dir_and_server.clone(),
+            create_output_dir_and_server,
             |(output_dir, server)| {
                 let uri = &server.url("/foo").to_string();
                 fetch_uri_with_ripunzip(uri, output_dir, &ripunzip_path);
@@ -115,7 +115,7 @@ fn uri_comparison(c: &mut Criterion, params: &ZipParams, server_type: ServerType
     });
     group.bench_function(&format!("{} unzip", &desc), |b| {
         b.iter_batched(
-            create_output_dir_and_server.clone(),
+            create_output_dir_and_server,
             |(output_dir, server)| {
                 let uri = &server.url("/foo").to_string();
                 fetch_uri_with_curl_and_unzip(uri, output_dir)
@@ -155,7 +155,7 @@ fn real_world_uri_comparison(c: &mut Criterion) {
 fn real_world_uri_comparison(_c: &mut Criterion) {}
 
 fn fetch_uri_with_ripunzip(uri: &str, output_dir: TempDir, ripunzip_path: &Path) {
-    Command::new(&ripunzip_path)
+    Command::new(ripunzip_path)
         .arg("-d")
         .arg(output_dir.path())
         .arg("uri")

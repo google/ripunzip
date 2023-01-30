@@ -307,7 +307,7 @@ fn extract_file<T: Read + Seek>(
         .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
         .to_string();
     extract_file_inner(file, output_directory, progress_reporter, directory_creator)
-        .with_context(|| format!("Failed to extract {}", name))
+        .with_context(|| format!("Failed to extract {name}"))
 }
 
 /// Extracts a file from a zip file.
