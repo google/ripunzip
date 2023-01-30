@@ -84,7 +84,7 @@ impl httptest::responders::Responder for RangeAwareResponse {
             }
         };
         let resp = builder
-            .header("Content-Length", format!("{}", content_length))
+            .header("Content-Length", format!("{content_length}"))
             .body(body.unwrap_or_default().into())
             .unwrap();
         Box::pin(_respond(resp))
@@ -239,7 +239,7 @@ impl Display for ZipParams {
             zip::CompressionMethod::Deflated => "deflated",
             _ => todo!(),
         };
-        write!(f, " {}", comp)
+        write!(f, " {comp}")
     }
 }
 
@@ -274,7 +274,7 @@ fn create_zip(w: impl Write + Seek, zip_params: &ZipParams) {
     };
 
     for i in 0..zip_params.num_files {
-        zip.start_file(format!("{}.txt", i), options).unwrap();
+        zip.start_file(format!("{i}.txt"), options).unwrap();
         zip.write_all(file_generator.next().unwrap()().as_bytes())
             .unwrap();
     }
