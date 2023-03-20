@@ -252,7 +252,6 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
 ) -> Vec<anyhow::Error> {
     if single_threaded {
         (0..len)
-            .into_iter()
             .map(|i| {
                 extract_file(
                     // We theoretically don't need to clone in this case but it
