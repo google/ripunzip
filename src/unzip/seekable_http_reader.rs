@@ -34,7 +34,14 @@ use super::{
 /// acting on the data to unzip their files until the read is complete. If we
 /// set this too low, the cache structure (a `BTreeMap`) becomes dominant in
 /// CPU usage.
-const MAX_BLOCK: usize = 1024 * 1024;
+const DEFAULT_MAX_BLOCK: usize = 1024 * 1024;
+
+/// If we're going to skip over this much data in the underlying stream,
+/// discard the stream and start further ahead. This is a large number
+/// because it's expensive to create new HTTPS streams, and we also can't
+/// be 100% sure we won't need bytes during this gap which might cause
+/// an expensive rewind.
+const DEFAULT_SKIP_AHEAD_THRESHOLD: u64 = 2 * 1024 * 1024; // 2MB
 
 /// A hint to the [`SeekableHttpReaderEngine`] about the expected access pattern.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -118,22 +125,36 @@ struct State {
     /// Whether a read from the underlying HTTP stream is afoot. Only one thread
     /// can be doing a read at a time.
     read_in_progress: bool,
+    /// We expect to skip some range of the read.
+    expect_skip_ahead: u64,
+    /// Threshold for fast forwards when we'd expect to skip some data
+    /// and decide to create a new stream.
+    skip_ahead_threshold: u64,
+    /// How much to read from the underlying stream each time.
+    max_block: usize,
     /// Some statistics about how we're doing.
     stats: SeekableHttpReaderStatistics,
 }
 
 impl State {
-    fn new(readahead_limit: Option<usize>, access_pattern: AccessPattern) -> Self {
+    fn new(
+        readahead_limit: Option<usize>,
+        access_pattern: AccessPattern,
+        skip_ahead_threshold: u64,
+        max_block: usize,
+    ) -> Self {
         // Grow the readahead limit if it's less than block size, because we
         // must always store one block in order to service the most recent read.
         let readahead_limit = match readahead_limit {
-            Some(readahead_limit) if readahead_limit > MAX_BLOCK => Some(readahead_limit),
-            Some(_) => Some(MAX_BLOCK),
+            Some(readahead_limit) if readahead_limit > max_block => Some(readahead_limit),
+            Some(_) => Some(max_block),
             _ => None,
         };
         Self {
             readahead_limit,
             access_pattern,
+            skip_ahead_threshold,
+            max_block,
             ..Default::default()
         }
     }
@@ -171,8 +192,9 @@ impl State {
         let discard_read_data = matches!(self.access_pattern, AccessPattern::SequentialIsh);
         let mut block_to_discard = None;
         let mut return_value = None;
-        for (possible_block_start, block) in
-            self.cache.range_mut(pos - min(pos, MAX_BLOCK as u64)..=pos)
+        for (possible_block_start, block) in self
+            .cache
+            .range_mut(pos - min(pos, self.max_block as u64)..=pos)
         {
             let block_offset = pos as usize - *possible_block_start as usize;
             let block_len = block.len();
@@ -189,6 +211,8 @@ impl State {
             let to_read = min(buf.len(), block_len - block_offset);
             buf[..to_read].copy_from_slice(block.read(block_offset..to_read + block_offset));
             block.bytes_read += to_read;
+            // TODO - fix bug where bytes_read is incremented even if there's
+            // a rewind and we read the same bytes several times
             self.stats.cache_hits += 1;
             if discard_read_data && block.entirely_consumed() {
                 // Discard this block, but outside this loop
@@ -266,6 +290,22 @@ impl SeekableHttpReaderEngine {
         readahead_limit: Option<usize>,
         access_pattern: AccessPattern,
     ) -> Result<Arc<Self>, Error> {
+        Self::with_configuration(
+            uri,
+            readahead_limit,
+            access_pattern,
+            DEFAULT_SKIP_AHEAD_THRESHOLD,
+            DEFAULT_MAX_BLOCK,
+        )
+    }
+
+    fn with_configuration(
+        uri: String,
+        readahead_limit: Option<usize>,
+        access_pattern: AccessPattern,
+        skip_ahead_threshold: u64,
+        max_block: usize,
+    ) -> Result<Arc<Self>, Error> {
         let range_fetcher = RangeFetcher::new(uri).map_err(Error::RangeFetcherError)?;
         if !range_fetcher.accepts_ranges() {
             return Err(Error::AcceptRangesNotSupported);
@@ -277,7 +317,12 @@ impl SeekableHttpReaderEngine {
                 range_fetcher,
                 reader: None,
             }),
-            state: Mutex::new(State::new(readahead_limit, access_pattern)),
+            state: Mutex::new(State::new(
+                readahead_limit,
+                access_pattern,
+                skip_ahead_threshold,
+                max_block,
+            )),
             read_completed: Condvar::new(),
         }))
     }
@@ -362,16 +407,29 @@ impl SeekableHttpReaderEngine {
         //   - If no:
         //     set read in progress
         state.read_in_progress = true;
+        // If we need to read ahead,
+        let expect_skip_ahead = state.expect_skip_ahead;
+        state.expect_skip_ahead = 0;
+        let skip_ahead_threshold = state.skip_ahead_threshold;
+        let max_block = state.max_block;
         //     claim READER mutex
         let mut reading_stuff = self.reader.lock().unwrap();
         //     release STATE mutex
         drop(state);
         //     perform read
-        // First check if we need to rewind.
+        // First check if we need to rewind, OR if we need to fast forward
+        // and are expecting to skip over some significant data.
         if let Some((_, readerpos)) = reading_stuff.reader.as_ref() {
             if pos < *readerpos {
                 log::info!(
-                    "New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
+                    "Rewinding: New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
+                    pos,
+                    *readerpos
+                );
+                reading_stuff.reader = None;
+            } else if pos > *readerpos && expect_skip_ahead > skip_ahead_threshold {
+                log::info!("Fast forwarding expected skip is 0x{:x}: New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
+                    expect_skip_ahead,
                     pos,
                     *readerpos
                 );
@@ -395,12 +453,16 @@ impl SeekableHttpReaderEngine {
 
         let (reader, reader_pos) = reading_stuff.reader.as_mut().unwrap();
         if pos > *reader_pos {
-            log::info!("Read: fast-forward from 0x{:x} to 0x{:x}", *reader_pos, pos);
+            log::info!(
+                "Read: reading ahead from 0x{:x} to 0x{:x} without skipping",
+                *reader_pos,
+                pos
+            );
         }
         while pos >= *reader_pos {
             // Fast forward beyond the desired position, recording any reads in the cache
             // for later.
-            let to_read = min(MAX_BLOCK, self.len as usize - *reader_pos as usize);
+            let to_read = min(max_block, self.len as usize - *reader_pos as usize);
             let mut new_block = vec![0u8; to_read];
             reader.read_exact(&mut new_block)?;
             //     claim STATE mutex
@@ -464,6 +526,12 @@ impl SeekableHttpReaderEngine {
             state.stats.num_http_streams += 1;
         }
         state.access_pattern = access_pattern;
+    }
+
+    /// Call this if we're going to skip over some part of the zip.
+    pub(crate) fn read_skip_expected(&self, skipping_by: u64) {
+        let mut state = self.state.lock().unwrap();
+        state.expect_skip_ahead += skipping_by;
     }
 
     /// Return some statistics about the success (or otherwise) of this stream.
@@ -534,6 +602,8 @@ mod tests {
 
     use httptest::{matchers::*, responders::*, Expectation, Server};
 
+    use crate::unzip::seekable_http_reader::DEFAULT_MAX_BLOCK;
+
     use super::{AccessPattern, SeekableHttpReaderEngine};
 
     #[test]
@@ -557,6 +627,11 @@ mod tests {
         do_test(None, AccessPattern::RandomAccess)
     }
 
+    fn get_head_expectation() -> Expectation {
+        Expectation::matching(request::method_path("HEAD", "/foo"))
+            .respond_with(RangeAwareResponder::expected_range(0, 12))
+    }
+
     fn get_range_expectation(expected_start: u64, expected_end: u64) -> Expectation {
         Expectation::matching(request::method_path("GET", "/foo"))
             .times(1..)
@@ -568,18 +643,19 @@ mod tests {
 
     fn do_test(readahead_limit: Option<usize>, access_pattern: AccessPattern) {
         let mut server = Server::run();
-        server.expect(
-            Expectation::matching(request::method_path("HEAD", "/foo"))
-                .respond_with(RangeAwareResponder::expected_range(0, 12)),
-        );
+        // Expect a HEAD request first
+        server.expect(get_head_expectation());
 
-        let mut seekable_http_reader = SeekableHttpReaderEngine::new(
+        let seekable_http_reader_engine = SeekableHttpReaderEngine::with_configuration(
             server.url("/foo").to_string(),
             readahead_limit,
             access_pattern,
+            4,
+            DEFAULT_MAX_BLOCK,
         )
-        .unwrap()
-        .create_reader();
+        .unwrap();
+
+        let mut seekable_http_reader = seekable_http_reader_engine.clone().create_reader();
         server.verify_and_clear();
 
         let mut throwaway = [0u8; 4];
@@ -620,6 +696,7 @@ mod tests {
         }
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "4567");
+
         if matches!(access_pattern, AccessPattern::SequentialIsh) {
             server.verify_and_clear();
         }
@@ -639,6 +716,37 @@ mod tests {
             // We expect no new requests. We'll just skip over.
             seekable_http_reader.read_exact(&mut throwaway).unwrap();
             assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "89AB");
+            server.verify_and_clear();
+
+            // Test fast forwarding far enough that we skip over stuff
+            // enough that we might discard the HTTP stream and start a new one.
+            // Create a new server where we read 4 bytes at a time from the
+            // underlying stream
+
+            server.expect(get_head_expectation());
+            let seekable_http_reader_engine = SeekableHttpReaderEngine::with_configuration(
+                server.url("/foo").to_string(),
+                readahead_limit,
+                access_pattern,
+                4,
+                4,
+            )
+            .unwrap();
+
+            let mut seekable_http_reader = seekable_http_reader_engine.clone().create_reader();
+
+            seekable_http_reader.rewind().unwrap();
+            server.expect(get_range_expectation(0, 12));
+            seekable_http_reader.read_exact(&mut throwaway).unwrap();
+            assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "0123");
+            server.verify_and_clear();
+            seekable_http_reader_engine.read_skip_expected(6);
+            seekable_http_reader.seek(SeekFrom::Start(10)).unwrap();
+            server.expect(get_range_expectation(10, 12));
+            seekable_http_reader
+                .read_exact(&mut throwaway[0..2])
+                .unwrap();
+            assert_eq!(std::str::from_utf8(&throwaway[0..2]).unwrap(), "AB");
             server.verify_and_clear();
         }
     }

@@ -10,6 +10,7 @@
 
 mod unzip;
 
+pub use unzip::FilenameFilter;
 pub use unzip::NullProgressReporter;
 pub use unzip::UnzipEngine;
 pub use unzip::UnzipOptions;
