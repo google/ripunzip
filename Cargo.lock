@@ -1431,6 +1431,7 @@ dependencies = [
  "monitor",
  "progress-streams",
  "rayon",
+ "regex",
  "reqwest",
  "ripunzip_test_utils",
  "tempfile",
