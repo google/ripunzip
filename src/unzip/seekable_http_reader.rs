@@ -518,6 +518,7 @@ impl HasLength for SeekableHttpReader {
 
 #[cfg(test)]
 mod tests {
+    use regex::Regex;
     use std::io::{Read, Seek, SeekFrom};
     use test_log::test;
 
@@ -603,5 +604,38 @@ mod tests {
         seekable_http_reader.seek(SeekFrom::Start(4)).unwrap();
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "4567");
+    }
+
+    struct RangeAwareResponder;
+
+    impl httptest::responders::Responder for RangeAwareResponder {
+        fn respond<'a>(
+            &mut self,
+            req: &'a http::Request<httptest::bytes::Bytes>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = http::Response<hyper::Body>> + Send + 'a>,
+        > {
+            let body = "0123456789AB";
+            let (start, end) = match req.headers().get("Range") {
+                None => (0usize, body.len()),
+                Some(val) => {
+                    let val = val.as_bytes();
+                    let val = std::str::from_utf8(val).expect("Range header not UTF");
+                    let range_re = Regex::new("bytes=(\\d+)-(\\d+)").unwrap();
+                    let captures = range_re.captures(val).expect("Unexpected Range header");
+                    let start = str::parse::<usize>(captures.get(1).unwrap().as_str()).unwrap();
+                    let end = str::parse::<usize>(captures.get(1).unwrap().as_str()).unwrap();
+                    (start, end)
+                }
+            };
+            let content_length = end - start;
+            let whole_body = "0123456789AB";
+            let body = &whole_body[start..end];
+            status_code(200)
+                .insert_header("Accept-Ranges", "bytes")
+                .insert_header("Content-Length", format!("{content_length}"))
+                .body(body)
+                .respond(req)
+        }
     }
 }
