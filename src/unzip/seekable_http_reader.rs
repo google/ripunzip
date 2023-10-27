@@ -606,7 +606,19 @@ mod tests {
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "4567");
     }
 
-    struct RangeAwareResponder;
+    struct RangeAwareResponder {
+        expected_start: u64,
+        expected_end: u64,
+    }
+
+    impl RangeAwareResponder {
+        fn expected_range(expected_start: u64, expected_end: u64) -> Self {
+            Self {
+                expected_start,
+                expected_end,
+            }
+        }
+    }
 
     impl httptest::responders::Responder for RangeAwareResponder {
         fn respond<'a>(
@@ -628,6 +640,8 @@ mod tests {
                     (start, end)
                 }
             };
+            assert_eq!(self.expected_start, start, "Unexpected start location");
+            assert_eq!(self.expected_end, end, "Unexpected end location");
             let content_length = end - start;
             let whole_body = "0123456789AB";
             let body = &whole_body[start..end];
