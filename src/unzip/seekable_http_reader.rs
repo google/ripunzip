@@ -547,15 +547,20 @@ mod tests {
         do_test(None, AccessPattern::RandomAccess)
     }
 
+    fn get_range_expectation(expected_start: u64, expected_end: u64) -> Expectation {
+        Expectation::matching(request::method_path("GET", "/foo"))
+            .times(..)
+            .respond_with(RangeAwareResponder::expected_range(
+                expected_start,
+                expected_end,
+            ))
+    }
+
     fn do_test(readahead_limit: Option<usize>, access_pattern: AccessPattern) {
-        let server = Server::run();
+        let mut server = Server::run();
         server.expect(
-            Expectation::matching(request::method_path("HEAD", "/foo")).respond_with(
-                status_code(200)
-                    .insert_header("Accept-Ranges", "bytes")
-                    .insert_header("Content-Length", "12")
-                    .body("0123456789AB"),
-            ),
+            Expectation::matching(request::method_path("HEAD", "/foo"))
+                .respond_with(RangeAwareResponder::expected_range(0, 12)),
         );
 
         let mut seekable_http_reader = SeekableHttpReaderEngine::new(
@@ -565,45 +570,37 @@ mod tests {
         )
         .unwrap()
         .create_reader();
+        server.verify_and_clear();
+
         let mut throwaway = [0u8; 4];
 
-        server.expect(
-            Expectation::matching(request::method_path("GET", "/foo"))
-                .times(..)
-                .respond_with(
-                    status_code(200)
-                        .insert_header("Accept-Ranges", "bytes")
-                        .insert_header("Content-Length", "12")
-                        .body("0123456789AB"),
-                ),
-        );
+        // We expect a read request for the whole file
+        server.expect(get_range_expectation(0, 12));
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "0123");
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "4567");
         seekable_http_reader.stream_position().unwrap();
+        server.expect(get_range_expectation(8, 12));
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "89AB");
+        // server.verify_and_clear();
+
+        // Now rewind. We expect a new request for the whole file
         seekable_http_reader.rewind().unwrap();
+        server.expect(get_range_expectation(0, 12));
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "0123");
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "4567");
+        server.verify_and_clear();
 
-        server.expect(
-            Expectation::matching(request::method_path("GET", "/foo"))
-                .times(..)
-                .respond_with(
-                    status_code(200)
-                        .insert_header("Accept-Ranges", "bytes")
-                        .insert_header("Content-Length", "8")
-                        .body("456789AB"),
-                ),
-        );
-
+        // Rewind a bit... we should get a range request only from here on.
         seekable_http_reader.seek(SeekFrom::Start(4)).unwrap();
+        server.expect(get_range_expectation(4, 8));
         seekable_http_reader.read_exact(&mut throwaway).unwrap();
         assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "4567");
+        server.verify_and_clear();
     }
 
     struct RangeAwareResponder {
@@ -633,15 +630,19 @@ mod tests {
                 Some(val) => {
                     let val = val.as_bytes();
                     let val = std::str::from_utf8(val).expect("Range header not UTF");
+                    log::info!("Got header {val}");
                     let range_re = Regex::new("bytes=(\\d+)-(\\d+)").unwrap();
                     let captures = range_re.captures(val).expect("Unexpected Range header");
                     let start = str::parse::<usize>(captures.get(1).unwrap().as_str()).unwrap();
-                    let end = str::parse::<usize>(captures.get(1).unwrap().as_str()).unwrap();
+                    let end = str::parse::<usize>(captures.get(2).unwrap().as_str()).unwrap();
                     (start, end)
                 }
             };
-            assert_eq!(self.expected_start, start, "Unexpected start location");
-            assert_eq!(self.expected_end, end, "Unexpected end location");
+            assert_eq!(
+                self.expected_start, start as u64,
+                "Unexpected start location"
+            );
+            assert_eq!(self.expected_end, end as u64, "Unexpected end location");
             let content_length = end - start;
             let whole_body = "0123456789AB";
             let body = &whole_body[start..end];
