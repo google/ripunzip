@@ -338,6 +338,7 @@ impl SeekableHttpReaderEngine {
 
     /// Read some data, ideally from the cache of pre-read blocks, but
     /// otherwise from the underlying HTTP stream.
+    #[allow(clippy::comparison_chain)]
     fn read(&self, buf: &mut [u8], pos: u64) -> std::io::Result<usize> {
         // There is some mutex delicacy here. Goals are:
         // a) Allow exactly one thread to be reading on the underlying HTTP stream;
@@ -427,13 +428,20 @@ impl SeekableHttpReaderEngine {
                     *readerpos
                 );
                 reading_stuff.reader = None;
-            } else if pos > *readerpos && expect_skip_ahead > skip_ahead_threshold {
-                log::info!("Fast forwarding expected skip is 0x{:x}: New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
-                    expect_skip_ahead,
-                    pos,
-                    *readerpos
-                );
-                reading_stuff.reader = None;
+            } else if pos > *readerpos {
+                let delta = pos - *readerpos;
+                // Discard the existing stream and create a new one if we're skipping ahead a lot,
+                // AND we *expect* to be skipping ahead a lot. Otherwise it might be random
+                // seeks within an area backwards and forwards, and creating a new HTTP(S) stream
+                // is wasteful.
+                if delta > skip_ahead_threshold && expect_skip_ahead > skip_ahead_threshold {
+                    log::info!("Fast forwarding expected skip is 0x{:x}: New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
+                        expect_skip_ahead,
+                        pos,
+                        *readerpos
+                    );
+                    reading_stuff.reader = None;
+                }
             }
         }
         let mut reader_created = false;
