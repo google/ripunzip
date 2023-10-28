@@ -38,6 +38,10 @@ pub struct UnzipOptions {
     pub output_directory: Option<PathBuf>,
     /// Whether to run in single-threaded mode.
     pub single_threaded: bool,
+    /// A filename filter, optionally
+    pub filename_filter: Option<Box<dyn FilenameFilter + Sync>>,
+    /// An object to receive notifications of unzip progress.
+    pub progress_reporter: Box<dyn UnzipProgressReporter + Sync>,
 }
 
 /// A trait of types which wish to hear progress updates on the unzip.
@@ -68,9 +72,7 @@ impl UnzipProgressReporter for NullProgressReporter {}
 /// An object which can unzip a zip file, in its entirety, from a local
 /// file or from a network stream. It tries to do this in parallel wherever
 /// possible.
-pub struct UnzipEngine<P: UnzipProgressReporter> {
-    progress_reporter: P,
-    options: UnzipOptions,
+pub struct UnzipEngine {
     zipfile: Box<dyn UnzipEngineImpl>,
     compressed_length: u64,
     directory_creator: DirectoryCreator,
@@ -93,6 +95,9 @@ trait UnzipEngineImpl {
         progress_reporter: &(dyn UnzipProgressReporter + Sync),
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error>;
+
+    // Due to lack of RPITIT we'll return a Vec<String> here
+    fn list(&self) -> Result<Vec<String>, anyhow::Error>;
 }
 
 /// Engine which knows how to unzip a file.
@@ -118,6 +123,10 @@ impl UnzipEngineImpl for UnzipFileEngine {
             || self.0.clone(),
             |_skip_by: u64| {},
         )
+    }
+
+    fn list(&self) -> Result<Vec<String>, anyhow::Error> {
+        list(&self.0)
     }
 }
 
@@ -157,19 +166,21 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
         }
         result
     }
+
+    fn list(&self) -> Result<Vec<String>, anyhow::Error> {
+        list(&self.1)
+    }
 }
 
-impl<P: UnzipProgressReporter> UnzipEngine<P> {
+impl UnzipEngine {
     /// Create an unzip engine which knows how to unzip a file.
-    pub fn for_file(zipfile: File, options: UnzipOptions, progress_reporter: P) -> Result<Self> {
+    pub fn for_file(zipfile: File) -> Result<Self> {
         // The following line doesn't actually seem to make any significant
         // performance difference.
         // let zipfile = BufReader::new(zipfile);
         let compressed_length = zipfile.len();
         let zipfile = CloneableSeekableReader::new(zipfile);
         Ok(Self {
-            progress_reporter,
-            options,
             zipfile: Box::new(UnzipFileEngine(ZipArchive::new(zipfile)?)),
             compressed_length,
             directory_creator: DirectoryCreator::default(),
@@ -187,9 +198,7 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
     ///   too small.)
     pub fn for_uri<F: Fn() + 'static>(
         uri: &str,
-        options: UnzipOptions,
         readahead_limit: Option<usize>,
-        progress_reporter: P,
         callback_on_rewind: F,
     ) -> Result<Self> {
         let seekable_http_reader = SeekableHttpReaderEngine::new(
@@ -223,8 +232,6 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
                 }
             };
         Ok(Self {
-            progress_reporter,
-            options,
             zipfile,
             compressed_length,
             directory_creator: DirectoryCreator::default(),
@@ -237,28 +244,38 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
         self.compressed_length
     }
 
-    /// Perform the unzip.
-    pub fn unzip(self) -> Result<()> {
-        self.unzip_selective(Box::new(UnzipAllFilter))
-    }
-
-    // Unzip just some files, using the provided filter function.
-    pub fn unzip_selective(mut self, filter: Box<dyn FilenameFilter + Sync>) -> Result<()> {
+    // Perform the unzip.
+    pub fn unzip(mut self, options: UnzipOptions) -> Result<()> {
         log::info!("Starting extract");
-        self.progress_reporter
+        options
+            .progress_reporter
             .total_bytes_expected(self.compressed_length);
-        let output_directory = &self.options.output_directory;
-        let single_threaded = self.options.single_threaded;
+        let filter = options
+            .filename_filter
+            .unwrap_or_else(|| Box::new(UnzipAllFilter));
         let errors = self.zipfile.unzip(
-            single_threaded,
-            output_directory,
+            options.single_threaded,
+            &options.output_directory,
             filter,
-            &self.progress_reporter,
+            options.progress_reporter.as_ref(),
             &self.directory_creator,
         );
         // Return the first error code, if any.
         errors.into_iter().next().map(Result::Err).unwrap_or(Ok(()))
     }
+
+    /// List the filenames in the archive
+    pub fn list(self) -> Result<impl Iterator<Item = String>> {
+        // In future this might be a more dynamic iterator type.
+        self.zipfile.list().map(|v| v.into_iter())
+    }
+}
+
+/// Return a list of filenames from the zip. For now this is infallible
+/// but provide the option of an error code in case we do something
+/// smarter in future.
+fn list<'a, T: Read + Seek + 'a>(zip_archive: &ZipArchive<T>) -> Result<Vec<String>> {
+    Ok(zip_archive.file_names().map(|s| s.to_string()).collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -446,6 +463,7 @@ impl FilenameFilter for UnzipAllFilter {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashSet,
         env::{current_dir, set_current_dir},
         fs::{read_to_string, File},
         io::{Cursor, Seek, Write},
@@ -468,10 +486,10 @@ mod tests {
 
     fn run_with_and_without_a_filename_filter<F>(fun: F)
     where
-        F: Fn(bool, Box<dyn FilenameFilter + Sync>),
+        F: Fn(bool, Option<Box<dyn FilenameFilter + Sync>>),
     {
-        fun(true, Box::new(UnzipAllFilter));
-        fun(false, Box::new(UnzipSomeFilter));
+        fun(true, None);
+        fun(false, Some(Box::new(UnzipSomeFilter)));
     }
 
     fn create_zip_file(path: &Path, include_a_txt: bool) {
@@ -513,7 +531,7 @@ mod tests {
     #[test]
     #[ignore] // because the chdir changes global state
     fn test_extract_no_path() {
-        run_with_and_without_a_filename_filter(|create_a, filter| {
+        run_with_and_without_a_filename_filter(|create_a, filename_filter| {
             let td = tempdir().unwrap();
             let zf = td.path().join("z.zip");
             create_zip_file(&zf, create_a);
@@ -523,11 +541,10 @@ mod tests {
             let options = UnzipOptions {
                 output_directory: None,
                 single_threaded: false,
+                filename_filter,
+                progress_reporter: Box::new(NullProgressReporter),
             };
-            UnzipEngine::for_file(zf, options, NullProgressReporter)
-                .unwrap()
-                .unzip_selective(filter)
-                .unwrap();
+            UnzipEngine::for_file(zf).unwrap().unzip(options).unwrap();
             set_current_dir(old_dir).unwrap();
             check_files_exist(td.path(), create_a);
         });
@@ -535,7 +552,7 @@ mod tests {
 
     #[test]
     fn test_extract_with_path() {
-        run_with_and_without_a_filename_filter(|create_a, filter| {
+        run_with_and_without_a_filename_filter(|create_a, filename_filter| {
             let td = tempdir().unwrap();
             let zf = td.path().join("z.zip");
             create_zip_file(&zf, create_a);
@@ -544,22 +561,37 @@ mod tests {
             let options = UnzipOptions {
                 output_directory: Some(outdir.clone()),
                 single_threaded: false,
+                filename_filter,
+                progress_reporter: Box::new(NullProgressReporter),
             };
-            UnzipEngine::for_file(zf, options, NullProgressReporter)
-                .unwrap()
-                .unzip_selective(filter)
-                .unwrap();
+            UnzipEngine::for_file(zf).unwrap().unzip(options).unwrap();
             check_files_exist(&outdir, create_a);
         });
     }
 
+    #[test]
+    fn test_list() {
+        let td = tempdir().unwrap();
+        let zf = td.path().join("z.zip");
+        create_zip_file(&zf, true);
+        let zf = File::open(zf).unwrap();
+        let filenames: HashSet<_> = UnzipEngine::for_file(zf).unwrap().list().unwrap().collect();
+        assert_eq!(
+            filenames,
+            ["test/", "test/a.txt", "b.txt", "test/c.txt"]
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect()
+        )
+    }
+
     use httptest::Server;
 
-    use super::{FilenameFilter, UnzipAllFilter};
+    use super::FilenameFilter;
 
     #[test]
     fn test_extract_from_server() {
-        run_with_and_without_a_filename_filter(|create_a, filter| {
+        run_with_and_without_a_filename_filter(|create_a, filename_filter| {
             let td = tempdir().unwrap();
             let mut zip_data = Cursor::new(Vec::new());
             create_zip(&mut zip_data, create_a);
@@ -574,17 +606,13 @@ mod tests {
             let options = UnzipOptions {
                 output_directory: Some(outdir.clone()),
                 single_threaded: false,
+                filename_filter,
+                progress_reporter: Box::new(NullProgressReporter),
             };
-            UnzipEngine::for_uri(
-                &server.url("/foo").to_string(),
-                options,
-                None,
-                NullProgressReporter,
-                || {},
-            )
-            .unwrap()
-            .unzip_selective(filter)
-            .unwrap();
+            UnzipEngine::for_uri(&server.url("/foo").to_string(), None, || {})
+                .unwrap()
+                .unzip(options)
+                .unwrap();
             check_files_exist(&outdir, create_a);
         });
     }
@@ -600,17 +628,13 @@ mod tests {
         let options = UnzipOptions {
             output_directory: Some(outdir),
             single_threaded: false,
+            filename_filter: None,
+            progress_reporter: Box::new(NullProgressReporter),
         };
-        UnzipEngine::for_uri(
-            &server.url("/foo").to_string(),
-            options,
-            None,
-            NullProgressReporter,
-            || {},
-        )
-        .unwrap()
-        .unzip()
-        .unwrap();
+        UnzipEngine::for_uri(&server.url("/foo").to_string(), None, || {})
+            .unwrap()
+            .unzip(options)
+            .unwrap();
     }
 
     #[test]

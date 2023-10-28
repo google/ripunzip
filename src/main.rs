@@ -8,20 +8,56 @@
 
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf};
+use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf, sync::RwLock};
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use ripunzip::{FilenameFilter, UnzipEngine, UnzipOptions, UnzipProgressReporter};
 
 /// Unzip all files within a zip file as quickly as possible.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+struct RipunzipArgs {
     #[command(subcommand)]
     command: Commands,
+}
 
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Lists a zip file
+    ListFile {
+        #[command(flatten)]
+        file_args: FileArgs,
+    },
+
+    /// Unzip a zip file
+    UnzipFile {
+        #[command(flatten)]
+        file_args: FileArgs,
+
+        #[command(flatten)]
+        unzip_args: UnzipArgs,
+    },
+
+    /// Lists a zip file from a URI
+    ListUri {
+        #[command(flatten)]
+        uri_args: UriArgs,
+    },
+
+    /// Unzips a zip file from a URO
+    UnzipUri {
+        #[command(flatten)]
+        uri_args: UriArgs,
+
+        #[command(flatten)]
+        unzip_args: UnzipArgs,
+    },
+}
+
+#[derive(Args, Debug)]
+struct UnzipArgs {
     /// The output directory into which to place the files. By default, the
     /// current working directory is used.
     #[arg(short = 'd', long, value_name = "DIRECTORY")]
@@ -38,27 +74,25 @@ struct Args {
     filenames_to_unzip: Vec<String>,
 }
 
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// unzips a zip file
-    File {
-        /// Zip file to unzip
-        #[arg(value_name = "FILE")]
-        zipfile: PathBuf,
-    },
-    /// downloads and unzips a zip file
-    Uri {
-        /// URI of zip file to download and unzip
-        #[arg(value_name = "URI")]
-        uri: String,
+#[derive(Args, Debug)]
+struct FileArgs {
+    /// Zip file to unzip
+    #[arg(value_name = "FILE")]
+    zipfile: PathBuf,
+}
 
-        /// Limit how far in the zip file we read ahead to allow parallel unzips.
-        /// By default, this is unlimited, which means total RAM use of this tool can be as much as the
-        /// fully compressed file size (in pathological cases only). Adding this limit will solve that
-        /// problem, but may make transfers much less efficient by requiring multiple HTTP streams.
-        #[arg(long, value_name = "BYTES")]
-        readahead_limit: Option<usize>,
-    },
+#[derive(Args, Debug)]
+struct UriArgs {
+    /// URI of zip file to download and unzip
+    #[arg(value_name = "URI")]
+    uri: String,
+
+    /// Limit how far in the zip file we read ahead to allow parallel unzips.
+    /// By default, this is unlimited, which means total RAM use of this tool can be as much as the
+    /// fully compressed file size (in pathological cases only). Adding this limit will solve that
+    /// problem, but may make transfers much less efficient by requiring multiple HTTP streams.
+    #[arg(long, value_name = "BYTES")]
+    readahead_limit: Option<usize>,
 }
 
 fn main() -> Result<()> {
@@ -78,41 +112,66 @@ fn main() -> Result<()> {
             )
         })
         .init();
-    let args = Args::parse();
-    let options = UnzipOptions {
-        output_directory: args.output_directory,
-        single_threaded: args.single_threaded,
-    };
-    let engine = match &args.command {
-        Commands::File { zipfile } => {
-            let zipfile = File::open(zipfile)?;
-            UnzipEngine::for_file(zipfile, options, ProgressDisplayer::new())?
-        }
-        Commands::Uri {
-            uri,
-            readahead_limit,
-        } => UnzipEngine::for_uri(
-            uri,
-            options,
-            *readahead_limit,
-            ProgressDisplayer::new(),
-            report_on_insufficient_readahead_size,
-        )?,
-    };
-    if args.filenames_to_unzip.is_empty() {
-        engine.unzip()
-    } else {
-        engine.unzip_selective(Box::new(FileListFilter(
-            args.filenames_to_unzip.clone().into_iter().collect(),
-        )))
+    let args = RipunzipArgs::parse();
+    match args.command {
+        Commands::ListFile { file_args } => list(construct_file_engine(file_args)?),
+        Commands::ListUri { uri_args } => list(construct_uri_engine(uri_args)?),
+        Commands::UnzipFile {
+            file_args,
+            unzip_args,
+        } => unzip(construct_file_engine(file_args)?, unzip_args),
+        Commands::UnzipUri {
+            uri_args,
+            unzip_args,
+        } => unzip(construct_uri_engine(uri_args)?, unzip_args),
     }
 }
 
-struct FileListFilter(HashSet<String>);
+fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs) -> Result<()> {
+    let filename_filter: Option<Box<dyn FilenameFilter + Sync>> =
+        if unzip_args.filenames_to_unzip.is_empty() {
+            None
+        } else {
+            Some(Box::new(FileListFilter(RwLock::new(
+                unzip_args.filenames_to_unzip.clone().into_iter().collect(),
+            ))))
+        };
+    let options = UnzipOptions {
+        output_directory: unzip_args.output_directory,
+        single_threaded: unzip_args.single_threaded,
+        filename_filter,
+        progress_reporter: Box::new(ProgressDisplayer::new()),
+    };
+    engine.unzip(options)
+}
+
+fn construct_file_engine(file_args: FileArgs) -> Result<UnzipEngine> {
+    let zipfile = File::open(file_args.zipfile)?;
+    UnzipEngine::for_file(zipfile)
+}
+
+fn construct_uri_engine(uri_args: UriArgs) -> Result<UnzipEngine> {
+    UnzipEngine::for_uri(
+        &uri_args.uri,
+        uri_args.readahead_limit,
+        report_on_insufficient_readahead_size,
+    )
+}
+
+fn list(engine: UnzipEngine) -> Result<()> {
+    let files = engine.list()?;
+    for f in files {
+        println!("{}", f);
+    }
+    Ok(())
+}
+
+struct FileListFilter(RwLock<HashSet<String>>);
 
 impl FilenameFilter for FileListFilter {
     fn should_unzip(&self, filename: &str) -> bool {
-        self.0.contains(filename)
+        let lock = self.0.read().unwrap();
+        lock.contains(filename)
     }
 }
 
