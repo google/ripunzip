@@ -75,7 +75,7 @@ impl RangeFetcher {
     /// can be expensive if you only care about a few bytes later in a
     /// resource.)
     pub(crate) fn fetch_range(&self, offset: u64) -> Result<Response, Error> {
-        log::info!("Fetch range 0x{:x}", offset);
+        log::debug!("Fetch range 0x{:x}", offset);
         let mut builder = self.client.get(&self.uri);
         if self.accept_ranges {
             let range_header = format!("bytes={}-{}", offset, self.len());
