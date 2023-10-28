@@ -6,6 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[cfg(feature = "plot_reads")]
+mod charting_read_plotter;
 mod cloneable_seekable_reader;
 mod http_range_reader;
 mod progress_updater;
