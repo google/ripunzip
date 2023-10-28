@@ -464,6 +464,7 @@ impl FilenameFilter for UnzipAllFilter {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashSet,
         env::{current_dir, set_current_dir},
         fs::{read_to_string, File},
         io::{Cursor, Seek, Write},
@@ -571,6 +572,26 @@ mod tests {
                 .unwrap();
             check_files_exist(&outdir, create_a);
         });
+    }
+
+    #[test]
+    fn test_list() {
+        let td = tempdir().unwrap();
+        let zf = td.path().join("z.zip");
+        create_zip_file(&zf, true);
+        let zf = File::open(zf).unwrap();
+        let filenames: HashSet<_> = UnzipEngine::for_file(zf, NullProgressReporter)
+            .unwrap()
+            .list()
+            .unwrap()
+            .collect();
+        assert_eq!(
+            filenames,
+            ["test/", "test/a.txt", "b.txt", "test/c.txt"]
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect()
+        )
     }
 
     use httptest::Server;
