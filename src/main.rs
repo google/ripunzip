@@ -127,7 +127,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn unzip(engine: UnzipEngine<ProgressDisplayer>, unzip_args: UnzipArgs) -> Result<()> {
+fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs) -> Result<()> {
     let filename_filter: Option<Box<dyn FilenameFilter + Sync>> =
         if unzip_args.filenames_to_unzip.is_empty() {
             None
@@ -140,25 +140,25 @@ fn unzip(engine: UnzipEngine<ProgressDisplayer>, unzip_args: UnzipArgs) -> Resul
         output_directory: unzip_args.output_directory,
         single_threaded: unzip_args.single_threaded,
         filename_filter,
+        progress_reporter: Box::new(ProgressDisplayer::new()),
     };
     engine.unzip(options)
 }
 
-fn construct_file_engine(file_args: FileArgs) -> Result<UnzipEngine<ProgressDisplayer>> {
+fn construct_file_engine(file_args: FileArgs) -> Result<UnzipEngine> {
     let zipfile = File::open(file_args.zipfile)?;
-    UnzipEngine::for_file(zipfile, ProgressDisplayer::new())
+    UnzipEngine::for_file(zipfile)
 }
 
-fn construct_uri_engine(uri_args: UriArgs) -> Result<UnzipEngine<ProgressDisplayer>> {
+fn construct_uri_engine(uri_args: UriArgs) -> Result<UnzipEngine> {
     UnzipEngine::for_uri(
         &uri_args.uri,
         uri_args.readahead_limit,
-        ProgressDisplayer::new(),
         report_on_insufficient_readahead_size,
     )
 }
 
-fn list(engine: UnzipEngine<ProgressDisplayer>) -> Result<()> {
+fn list(engine: UnzipEngine) -> Result<()> {
     let files = engine.list()?;
     for f in files {
         println!("{}", f);
