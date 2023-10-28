@@ -8,12 +8,12 @@
 
 #![forbid(unsafe_code)]
 
-use std::{fmt::Write, fs::File, path::PathBuf};
+use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use ripunzip::{UnzipEngine, UnzipOptions, UnzipProgressReporter};
+use ripunzip::{FilenameFilter, UnzipEngine, UnzipOptions, UnzipProgressReporter};
 
 /// Unzip all files within a zip file as quickly as possible.
 #[derive(Parser, Debug)]
@@ -31,6 +31,11 @@ struct Args {
     /// multiple threads are used, but this can lead to more network traffic.
     #[arg(long)]
     single_threaded: bool,
+
+    /// Optionally, a list of files to unzip from the zip file. Omit
+    /// to unzip all of them.
+    #[arg(value_name = "FILES")]
+    filenames_to_unzip: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -78,10 +83,10 @@ fn main() -> Result<()> {
         output_directory: args.output_directory,
         single_threaded: args.single_threaded,
     };
-    match &args.command {
+    let engine = match &args.command {
         Commands::File { zipfile } => {
             let zipfile = File::open(zipfile)?;
-            UnzipEngine::for_file(zipfile, options, ProgressDisplayer::new())?.unzip()
+            UnzipEngine::for_file(zipfile, options, ProgressDisplayer::new())?
         }
         Commands::Uri {
             uri,
@@ -92,8 +97,22 @@ fn main() -> Result<()> {
             *readahead_limit,
             ProgressDisplayer::new(),
             report_on_insufficient_readahead_size,
-        )?
-        .unzip(),
+        )?,
+    };
+    if args.filenames_to_unzip.is_empty() {
+        engine.unzip()
+    } else {
+        engine.unzip_selective(Box::new(FileListFilter(
+            args.filenames_to_unzip.clone().into_iter().collect(),
+        )))
+    }
+}
+
+struct FileListFilter(HashSet<String>);
+
+impl FilenameFilter for FileListFilter {
+    fn should_unzip(&self, filename: &str) -> bool {
+        self.0.contains(filename)
     }
 }
 
