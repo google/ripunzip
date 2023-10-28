@@ -8,10 +8,10 @@
 
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf};
+use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf, sync::RwLock};
 
 use anyhow::Result;
-use clap::{Parser, Subcommand, Args};
+use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use ripunzip::{FilenameFilter, UnzipEngine, UnzipOptions, UnzipProgressReporter};
 
@@ -21,36 +21,40 @@ use ripunzip::{FilenameFilter, UnzipEngine, UnzipOptions, UnzipProgressReporter}
 struct RipunzipArgs {
     #[command(subcommand)]
     command: Commands,
-
-    #[command(flatten)]
-    list_or_filter: ListOrFilter,
-
-    /// The output directory into which to place the files. By default, the
-    /// current working directory is used.
-    #[arg(short = 'd', long, value_name = "DIRECTORY")]
-    output_directory: Option<PathBuf>,
-
-    /// Whether to decompress on a single thread. By default,
-    /// multiple threads are used, but this can lead to more network traffic.
-    #[arg(long)]
-    single_threaded: bool,
-}
-
-#[derive(Args, Debug)]
-#[group(multiple = false)]
-struct ListOrFilter {
-    /// List the content of the zip file instead of extracting.
-    #[arg(short, long)]
-    list: bool,
-
-    /// Optionally, a list of files to unzip from the zip file. Omit
-    /// to unzip all of them.
-    #[arg(value_name = "FILES")]
-    filenames_to_unzip: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Lists a zip file
+    List {
+        #[command(subcommand)]
+        source: Sources,
+    },
+
+    /// Extracts one or all files from a zip file.
+    Unzip {
+        #[command(subcommand)]
+        source: Sources,
+
+        /// The output directory into which to place the files. By default, the
+        /// current working directory is used.
+        #[arg(short = 'd', long, value_name = "DIRECTORY")]
+        output_directory: Option<PathBuf>,
+
+        /// Whether to decompress on a single thread. By default,
+        /// multiple threads are used, but this can lead to more network traffic.
+        #[arg(long)]
+        single_threaded: bool,
+
+        /// Optionally, a list of files to unzip from the zip file. Omit
+        /// to unzip all of them.
+        #[arg(value_name = "FILES")]
+        filenames_to_unzip: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum Sources {
     /// unzips a zip file
     File {
         /// Zip file to unzip
@@ -90,45 +94,63 @@ fn main() -> Result<()> {
         })
         .init();
     let args = RipunzipArgs::parse();
-    let options = UnzipOptions {
-        output_directory: args.output_directory,
-        single_threaded: args.single_threaded,
-    };
-    let engine = match &args.command {
-        Commands::File { zipfile } => {
-            let zipfile = File::open(zipfile)?;
-            UnzipEngine::for_file(zipfile, options, ProgressDisplayer::new())?
+    match args.command {
+        Commands::List { source } => {
+            let files = construct_zip_engine(source)?.list()?;
+            for f in files {
+                println!("{}", f);
+            }
+            Ok(())
         }
-        Commands::Uri {
-            uri,
-            readahead_limit,
-        } => UnzipEngine::for_uri(
-            uri,
-            options,
-            *readahead_limit,
-            ProgressDisplayer::new(),
-            report_on_insufficient_readahead_size,
-        )?,
-    };
-    if args.list_or_filter.list {
-        engine.list()
-    } else {
-        let filenames_to_unzip = args.list_or_filter.filenames_to_unzip;
-        if filenames_to_unzip.is_empty() {
-            engine.unzip()
-        } else {
-            engine.unzip_selective(Box::new(FileListFilter(
-                filenames_to_unzip.clone().into_iter().collect(),
-            )))
+        Commands::Unzip {
+            source,
+            output_directory,
+            single_threaded,
+            filenames_to_unzip,
+        } => {
+            let filename_filter: Option<Box<dyn FilenameFilter + Sync>> =
+                if filenames_to_unzip.is_empty() {
+                    None
+                } else {
+                    Some(Box::new(FileListFilter(RwLock::new(
+                        filenames_to_unzip.clone().into_iter().collect(),
+                    ))))
+                };
+            let options = UnzipOptions {
+                output_directory,
+                single_threaded,
+                filename_filter,
+            };
+            let engine = construct_zip_engine(source)?;
+            engine.unzip(options)
         }
     }
 }
 
-struct FileListFilter(HashSet<String>);
+fn construct_zip_engine(source: Sources) -> Result<UnzipEngine<ProgressDisplayer>> {
+    match source {
+        Sources::File { zipfile } => {
+            let zipfile = File::open(zipfile)?;
+            UnzipEngine::for_file(zipfile, ProgressDisplayer::new())
+        }
+        Sources::Uri {
+            uri,
+            readahead_limit,
+        } => UnzipEngine::for_uri(
+            &uri,
+            readahead_limit,
+            ProgressDisplayer::new(),
+            report_on_insufficient_readahead_size,
+        ),
+    }
+}
+
+struct FileListFilter(RwLock<HashSet<String>>);
 
 impl FilenameFilter for FileListFilter {
     fn should_unzip(&self, filename: &str) -> bool {
-        self.0.contains(filename)
+        let lock = self.0.read().unwrap();
+        lock.contains(filename)
     }
 }
 
