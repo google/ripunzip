@@ -11,16 +11,19 @@
 use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf};
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, Args};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use ripunzip::{FilenameFilter, UnzipEngine, UnzipOptions, UnzipProgressReporter};
 
 /// Unzip all files within a zip file as quickly as possible.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+struct RipunzipArgs {
     #[command(subcommand)]
     command: Commands,
+
+    #[command(flatten)]
+    list_or_filter: ListOrFilter,
 
     /// The output directory into which to place the files. By default, the
     /// current working directory is used.
@@ -31,6 +34,14 @@ struct Args {
     /// multiple threads are used, but this can lead to more network traffic.
     #[arg(long)]
     single_threaded: bool,
+}
+
+#[derive(Args, Debug)]
+#[group(multiple = false)]
+struct ListOrFilter {
+    /// List the content of the zip file instead of extracting.
+    #[arg(short, long)]
+    list: bool,
 
     /// Optionally, a list of files to unzip from the zip file. Omit
     /// to unzip all of them.
@@ -78,7 +89,7 @@ fn main() -> Result<()> {
             )
         })
         .init();
-    let args = Args::parse();
+    let args = RipunzipArgs::parse();
     let options = UnzipOptions {
         output_directory: args.output_directory,
         single_threaded: args.single_threaded,
@@ -99,12 +110,17 @@ fn main() -> Result<()> {
             report_on_insufficient_readahead_size,
         )?,
     };
-    if args.filenames_to_unzip.is_empty() {
-        engine.unzip()
+    if args.list_or_filter.list {
+        engine.list()
     } else {
-        engine.unzip_selective(Box::new(FileListFilter(
-            args.filenames_to_unzip.clone().into_iter().collect(),
-        )))
+        let filenames_to_unzip = args.list_or_filter.filenames_to_unzip;
+        if filenames_to_unzip.is_empty() {
+            engine.unzip()
+        } else {
+            engine.unzip_selective(Box::new(FileListFilter(
+                filenames_to_unzip.clone().into_iter().collect(),
+            )))
+        }
     }
 }
 

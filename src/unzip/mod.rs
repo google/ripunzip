@@ -93,6 +93,9 @@ trait UnzipEngineImpl {
         progress_reporter: &(dyn UnzipProgressReporter + Sync),
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error>;
+
+    // Due to lack of RPITIT we'll return a Vec<String> here
+    fn list(&self) -> Result<Vec<String>, anyhow::Error>;
 }
 
 /// Engine which knows how to unzip a file.
@@ -258,6 +261,12 @@ impl<P: UnzipProgressReporter> UnzipEngine<P> {
         );
         // Return the first error code, if any.
         errors.into_iter().next().map(Result::Err).unwrap_or(Ok(()))
+    }
+
+    /// List the filenames in the archive
+    pub fn list(self) -> Result<impl Iterator<Item=String>> {
+        // In future this might be a more dynamic iterator type.
+        self.zipfile.list().map(|v| v.into_iter())
     }
 }
 
