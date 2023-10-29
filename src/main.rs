@@ -17,9 +17,13 @@ use ripunzip::{
     FilenameFilter, NullProgressReporter, UnzipEngine, UnzipOptions, UnzipProgressReporter,
 };
 
+const LONG_ABOUT: &str =
+    "ripunzip is a tool to unzip zip files in parallel, possibly from a remote server. 
+It works best with HTTP(S) servers that support Range requests.";
+
 /// Unzip all files within a zip file as quickly as possible.
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = LONG_ABOUT)]
 struct RipunzipArgs {
     #[command(subcommand)]
     command: Commands,
