@@ -268,25 +268,17 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
     // Call when a file is going to be skipped
     file_skip_callback: impl Fn() + Sync + Send + Clone,
 ) -> Vec<anyhow::Error> {
+    let progress_reporter: &dyn UnzipProgressReporter = options.progress_reporter.as_ref();
     match (options.filename_filter, options.single_threaded) {
         (None, true) => (0..len)
             .map(|i| {
-                let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
-                let progress_reporter: &dyn UnzipProgressReporter =
-                    options.progress_reporter.as_ref();
-                let file = myzip.by_index(i)?;
-                let name = file
-                    .enclosed_name()
-                    .map(Path::to_string_lossy)
-                    .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
-                    .to_string();
-                extract_file_inner(
-                    file,
+                extract_file_by_index(
+                    &get_ziparchive_clone,
+                    i,
                     &options.output_directory,
                     progress_reporter,
                     directory_creator,
                 )
-                .with_context(|| format!("Failed to extract {name}"))
             })
             .filter_map(Result::err)
             .collect(),
@@ -301,22 +293,13 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
             (0..len)
                 .par_bridge()
                 .map(|i| {
-                    let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
-                    let progress_reporter: &dyn UnzipProgressReporter =
-                        options.progress_reporter.as_ref();
-                    let file = myzip.by_index(i)?;
-                    let name = file
-                        .enclosed_name()
-                        .map(Path::to_string_lossy)
-                        .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
-                        .to_string();
-                    extract_file_inner(
-                        file,
+                    extract_file_by_index(
+                        &get_ziparchive_clone,
+                        i,
                         &options.output_directory,
                         progress_reporter,
                         directory_creator,
                     )
-                    .with_context(|| format!("Failed to extract {name}"))
                 })
                 .filter_map(Result::err)
                 .collect()
@@ -339,26 +322,20 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                 .map(|s| s.to_string())
                 .collect();
             log::info!("Will unzip {} matching filenames", filenames.len());
-            let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
             file_skip_callback();
 
-            let progress_reporter: &dyn UnzipProgressReporter = options.progress_reporter.as_ref();
+            // let progress_reporter: &dyn UnzipProgressReporter = options.progress_reporter.as_ref();
             filenames
                 .into_iter()
                 .map(|name| {
+                    let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
                     let file = myzip.by_name(&name)?;
-                    let name = file
-                        .enclosed_name()
-                        .map(Path::to_string_lossy)
-                        .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
-                        .to_string();
-                    let r = extract_file_inner(
+                    let r = extract_file(
                         file,
                         &options.output_directory,
                         progress_reporter,
                         directory_creator,
-                    )
-                    .with_context(|| format!("Failed to extract {name}"));
+                    );
                     file_skip_callback();
                     r
                 })
@@ -366,6 +343,33 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                 .collect()
         }
     }
+}
+
+fn extract_file_by_index<'a, T: Read + Seek + 'a>(
+    get_ziparchive_clone: impl Fn() -> ZipArchive<T> + Sync,
+    i: usize,
+    output_directory: &Option<PathBuf>,
+    progress_reporter: &dyn UnzipProgressReporter,
+    directory_creator: &DirectoryCreator,
+) -> Result<(), anyhow::Error> {
+    let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
+    let file = myzip.by_index(i)?;
+    extract_file(file, output_directory, progress_reporter, directory_creator)
+}
+
+fn extract_file(
+    file: ZipFile,
+    output_directory: &Option<PathBuf>,
+    progress_reporter: &dyn UnzipProgressReporter,
+    directory_creator: &DirectoryCreator,
+) -> Result<(), anyhow::Error> {
+    let name = file
+        .enclosed_name()
+        .map(Path::to_string_lossy)
+        .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
+        .to_string();
+    extract_file_inner(file, output_directory, progress_reporter, directory_creator)
+        .with_context(|| format!("Failed to extract {name}"))
 }
 
 /// Extracts a file from a zip file.

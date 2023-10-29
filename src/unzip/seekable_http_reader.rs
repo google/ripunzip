@@ -251,6 +251,9 @@ struct ReadingMaterials {
 /// objects that do. This object can only be used to access HTTP resources which
 /// support the `Range` header - an error will be reported on construction
 /// of this object if such ranges are not supported by the remote server.
+// Mutex invariant below: only ONE of these mutices may be claimed at once.
+// Ideally we'd enforce this in the type system
+// per https://medium.com/@adetaylor/can-the-rust-type-system-prevent-deadlocks-9ae6e4123037
 pub(crate) struct SeekableHttpReaderEngine {
     /// Total stream length
     len: u64,
@@ -299,6 +302,7 @@ impl SeekableHttpReaderEngine {
         )
     }
 
+    /// Constructor with a specific configuration, used for testing.
     fn with_configuration(
         uri: String,
         readahead_limit: Option<usize>,
