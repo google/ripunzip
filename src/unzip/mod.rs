@@ -244,7 +244,12 @@ impl UnzipEngine {
     /// List the filenames in the archive
     pub fn list(self) -> Result<impl Iterator<Item = String>> {
         // In future this might be a more dynamic iterator type.
-        self.zipfile.list().map(|v| v.into_iter())
+        self.zipfile.list().map(|mut v| {
+            // Names are returned in a HashMap iteration order so let's
+            // sort thme to be more reasonable
+            v.sort();
+            v.into_iter()
+        })
     }
 }
 
