@@ -299,7 +299,7 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
                     let progress_reporter: &dyn UnzipProgressReporter =
                         options.progress_reporter.as_ref();
-                    let file = myzip.by_index_raw(i)?;
+                    let file = myzip.by_index(i)?;
                     let name = file
                         .enclosed_name()
                         .map(Path::to_string_lossy)
