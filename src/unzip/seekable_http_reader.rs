@@ -23,6 +23,12 @@ use super::{
     http_range_reader::{self, RangeFetcher},
 };
 
+#[cfg(feature = "plot_reads")]
+type ReadPlotterImpl = super::charting_read_plotter::ChartingReadPlotter;
+
+#[cfg(not(feature = "plot_reads"))]
+type ReadPlotterImpl = NullReadPlotter;
+
 /// This is how much we read from the underlying HTTP stream in a given thread,
 /// before signalling other threads that they may wish to continue with their
 /// CPU-bound unzipping. Empirically determined.
@@ -134,6 +140,8 @@ struct State {
     max_block: usize,
     /// Some statistics about how we're doing.
     stats: SeekableHttpReaderStatistics,
+    /// Traces the read requests we get and how we service them
+    read_plotter: ReadPlotterImpl,
 }
 
 impl State {
@@ -315,18 +323,20 @@ impl SeekableHttpReaderEngine {
             return Err(Error::AcceptRangesNotSupported);
         }
         let len = range_fetcher.len();
+        let mut state = State::new(
+            readahead_limit,
+            access_pattern,
+            skip_ahead_threshold,
+            max_block,
+        );
+        state.read_plotter.set_len(len);
         Ok(Arc::new(Self {
             len,
             reader: Mutex::new(ReadingMaterials {
                 range_fetcher,
                 reader: None,
             }),
-            state: Mutex::new(State::new(
-                readahead_limit,
-                access_pattern,
-                skip_ahead_threshold,
-                max_block,
-            )),
+            state: Mutex::new(state),
             read_completed: Condvar::new(),
         }))
     }
@@ -393,6 +403,9 @@ impl SeekableHttpReaderEngine {
         // - If yes, release CACHE mutex, and return
         if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
             log::debug!("Immediate cache success");
+            state
+                .read_plotter
+                .plot_read(pos, buf.len(), ReadType::FromCache);
             return Ok(bytes_read_from_cache);
         }
         // - If no, check if read in progress
@@ -404,6 +417,9 @@ impl SeekableHttpReaderEngine {
             //     check cache again
             if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
                 log::debug!("Deferred cache success");
+                state
+                    .read_plotter
+                    .plot_read(pos, buf.len(), ReadType::FromCacheDeferred);
                 return Ok(bytes_read_from_cache);
             }
             read_in_progress = state.read_in_progress;
@@ -424,6 +440,7 @@ impl SeekableHttpReaderEngine {
         //     perform read
         // First check if we need to rewind, OR if we need to fast forward
         // and are expecting to skip over some significant data.
+        let mut read_type = ReadType::FromCacheAfterDirect;
         if let Some((_, readerpos)) = reading_stuff.reader.as_ref() {
             if pos < *readerpos {
                 log::debug!(
@@ -432,6 +449,7 @@ impl SeekableHttpReaderEngine {
                     *readerpos
                 );
                 reading_stuff.reader = None;
+                read_type = ReadType::FromCacheAfterDirectAfterRewind;
             } else if pos > *readerpos {
                 let delta = pos - *readerpos;
                 // Discard the existing stream and create a new one if we're skipping ahead a lot,
@@ -444,6 +462,7 @@ impl SeekableHttpReaderEngine {
                         *readerpos
                     );
                     reading_stuff.reader = None;
+                    read_type = ReadType::FromCacheAfterDirectAfterSkipOver;
                 }
             }
         }
@@ -479,6 +498,11 @@ impl SeekableHttpReaderEngine {
             //     claim STATE mutex
             let mut state = self.state.lock().unwrap();
             state.insert(*reader_pos, new_block);
+            state.read_plotter.plot_read(
+                *reader_pos,
+                to_read,
+                ReadType::IntoCacheDuringFastForward,
+            );
             // Tell any waiting threads they should re-check the cache
             self.read_completed.notify_all();
             *reader_pos += to_read as u64;
@@ -492,6 +516,7 @@ impl SeekableHttpReaderEngine {
             .read_from_cache(pos, buf)
             .expect("Cache still couldn't satisfy request event after reading beyond read pos");
         log::debug!("Cache success after read");
+        state.read_plotter.plot_read(pos, buf.len(), read_type);
         if reader_created {
             state.stats.num_http_streams += 1;
         }
@@ -603,6 +628,34 @@ impl HasLength for SeekableHttpReader {
     fn len(&self) -> u64 {
         self.engine.len()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ReadType {
+    FromCache,
+    FromCacheDeferred,
+    FromCacheAfterDirectAfterRewind,
+    FromCacheAfterDirectAfterSkipOver,
+    FromCacheAfterDirect,
+    IntoCacheDuringFastForward,
+}
+
+/// To be implemented by code which can record a trace of all the
+/// various types of read we perform, for diagnostic purposes.
+pub trait ReadPlotter {
+    fn set_len(&mut self, total_length: u64);
+    fn plot_read(&mut self, start: u64, len: usize, read_type: ReadType);
+}
+
+#[cfg(not(feature = "plot_reads"))]
+#[derive(Default)]
+struct NullReadPlotter;
+
+#[cfg(not(feature = "plot_reads"))]
+impl ReadPlotter for NullReadPlotter {
+    fn set_len(&mut self, _total_length: u64) {}
+
+    fn plot_read(&mut self, _start: u64, _len: usize, _read_type: ReadType) {}
 }
 
 #[cfg(test)]
