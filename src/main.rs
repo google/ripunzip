@@ -21,6 +21,9 @@ use ripunzip::{FilenameFilter, UnzipEngine, UnzipOptions, UnzipProgressReporter}
 struct RipunzipArgs {
     #[command(subcommand)]
     command: Commands,
+
+    #[command(flatten)]
+    verbose: clap_verbosity_flag::Verbosity,
 }
 
 #[derive(Subcommand, Debug)]
@@ -96,23 +99,10 @@ struct UriArgs {
 }
 
 fn main() -> Result<()> {
-    use std::io::Write;
-
-    env_logger::builder()
-        .format(|buf, record| {
-            let ts = buf.timestamp_micros();
-            writeln!(
-                buf,
-                "{}: {:?}: {}: {}",
-                ts,
-                std::thread::current().id(),
-                buf.default_level_style(record.level())
-                    .value(record.level()),
-                record.args()
-            )
-        })
-        .init();
     let args = RipunzipArgs::parse();
+    env_logger::Builder::new()
+        .filter_level(args.verbose.log_level_filter())
+        .init();
     match args.command {
         Commands::ListFile { file_args } => list(construct_file_engine(file_args)?),
         Commands::ListUri { uri_args } => list(construct_uri_engine(uri_args)?),
