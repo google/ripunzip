@@ -89,10 +89,7 @@ pub trait FilenameFilter {
 trait UnzipEngineImpl {
     fn unzip(
         &mut self,
-        single_threaded: bool,
-        output_directory: &Option<PathBuf>,
-        filename_filter: Box<dyn FilenameFilter + Sync>,
-        progress_reporter: &(dyn UnzipProgressReporter + Sync),
+        options: UnzipOptions,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error>;
 
@@ -107,21 +104,15 @@ struct UnzipFileEngine(ZipArchive<CloneableSeekableReader<File>>);
 impl UnzipEngineImpl for UnzipFileEngine {
     fn unzip(
         &mut self,
-        single_threaded: bool,
-        output_directory: &Option<PathBuf>,
-        filename_filter: Box<dyn FilenameFilter + Sync>,
-        progress_reporter: &(dyn UnzipProgressReporter + Sync),
+        options: UnzipOptions,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         unzip_serial_or_parallel(
             self.0.len(),
-            single_threaded,
-            output_directory,
-            filename_filter,
-            progress_reporter,
+            options,
             directory_creator,
             || self.0.clone(),
-            |_skip_by: u64| {},
+            || {},
         )
     }
 
@@ -142,23 +133,17 @@ struct UnzipUriEngine<F: Fn()>(
 impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
     fn unzip(
         &mut self,
-        single_threaded: bool,
-        output_directory: &Option<PathBuf>,
-        filename_filter: Box<dyn FilenameFilter + Sync>,
-        progress_reporter: &(dyn UnzipProgressReporter + Sync),
+        options: UnzipOptions,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         self.0
             .set_expected_access_pattern(AccessPattern::SequentialIsh);
         let result = unzip_serial_or_parallel(
             self.1.len(),
-            single_threaded,
-            output_directory,
-            filename_filter,
-            progress_reporter,
+            options,
             directory_creator,
             || self.1.clone(),
-            |skipping_by: u64| self.0.read_skip_expected(skipping_by),
+            || self.0.read_skip_expected(),
         );
         let stats = self.0.get_stats();
         if stats.cache_shrinks > 0 {
@@ -220,6 +205,7 @@ impl UnzipEngine {
                     // This server probably doesn't support HTTP ranges.
                     // Let's fall back to fetching the request into a temporary
                     // file then unzipping.
+                    log::warn!("HTTP(S) server does not support range requests - falling back to fetching whole file.");
                     let mut response = reqwest::blocking::get(uri)?;
                     let mut tempfile = tempfile::tempfile()?;
                     std::io::copy(&mut response, &mut tempfile)?;
@@ -246,20 +232,11 @@ impl UnzipEngine {
 
     // Perform the unzip.
     pub fn unzip(mut self, options: UnzipOptions) -> Result<()> {
-        log::info!("Starting extract");
+        log::debug!("Starting extract");
         options
             .progress_reporter
             .total_bytes_expected(self.compressed_length);
-        let filter = options
-            .filename_filter
-            .unwrap_or_else(|| Box::new(UnzipAllFilter));
-        let errors = self.zipfile.unzip(
-            options.single_threaded,
-            &options.output_directory,
-            filter,
-            options.progress_reporter.as_ref(),
-            &self.directory_creator,
-        );
+        let errors = self.zipfile.unzip(options, &self.directory_creator);
         // Return the first error code, if any.
         errors.into_iter().next().map(Result::Err).unwrap_or(Ok(()))
     }
@@ -278,86 +255,111 @@ fn list<'a, T: Read + Seek + 'a>(zip_archive: &ZipArchive<T>) -> Result<Vec<Stri
     Ok(zip_archive.file_names().map(|s| s.to_string()).collect())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
     len: usize,
-    single_threaded: bool,
-    output_directory: &Option<PathBuf>,
-    filename_filter: Box<dyn FilenameFilter + Sync>,
-    progress_reporter: &dyn UnzipProgressReporter,
+    options: UnzipOptions,
     directory_creator: &DirectoryCreator,
     get_ziparchive_clone: impl Fn() -> ZipArchive<T> + Sync,
     // Call when a file is going to be skipped
-    file_skip_callback: impl Fn(u64) + Sync + Send + Clone,
+    file_skip_callback: impl Fn() + Sync + Send + Clone,
 ) -> Vec<anyhow::Error> {
-    if single_threaded {
-        (0..len)
+    match (options.filename_filter, options.single_threaded) {
+        (None, true) => (0..len)
             .map(|i| {
-                extract_file_if_on_list(
-                    // We theoretically don't need to clone in this case but it
-                    // more easily allows us to extract this common code from the
-                    // file and URI case.
-                    &mut get_ziparchive_clone(),
-                    i,
-                    output_directory,
-                    filename_filter.as_ref(),
+                let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
+                let progress_reporter: &dyn UnzipProgressReporter =
+                    options.progress_reporter.as_ref();
+                let file = myzip.by_index(i)?;
+                let name = file
+                    .enclosed_name()
+                    .map(Path::to_string_lossy)
+                    .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
+                    .to_string();
+                extract_file_inner(
+                    file,
+                    &options.output_directory,
                     progress_reporter,
                     directory_creator,
-                    file_skip_callback.clone(),
                 )
+                .with_context(|| format!("Failed to extract {name}"))
             })
             .filter_map(Result::err)
-            .collect()
-    } else {
-        // We use par_bridge here rather than into_par_iter because it turns
-        // out to better preserve ordering of the IDs in the input range,
-        // i.e. we're more likely to ask our initial threads to act upon
-        // file IDs 0, 1, 2, 3, 4, 5 rather than 0, 1000, 2000, 3000 etc.
-        // On a device which is CPU-bound or IO-bound (rather than network
-        // bound) that's beneficial because we can start to decompress
-        // and write data to disk as soon as it arrives from the network.
-        (0..len)
-            .par_bridge()
-            .map(|i| {
-                extract_file_if_on_list(
-                    &mut get_ziparchive_clone(),
-                    i,
-                    output_directory,
-                    filename_filter.as_ref(),
-                    progress_reporter,
-                    directory_creator,
-                    file_skip_callback.clone(),
-                )
-            })
-            .filter_map(Result::err)
-            .collect()
-    }
-}
+            .collect(),
+        (None, false) => {
+            // We use par_bridge here rather than into_par_iter because it turns
+            // out to better preserve ordering of the IDs in the input range,
+            // i.e. we're more likely to ask our initial threads to act upon
+            // file IDs 0, 1, 2, 3, 4, 5 rather than 0, 1000, 2000, 3000 etc.
+            // On a device which is CPU-bound or IO-bound (rather than network
+            // bound) that's beneficial because we can start to decompress
+            // and write data to disk as soon as it arrives from the network.
+            (0..len)
+                .par_bridge()
+                .map(|i| {
+                    let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
+                    let progress_reporter: &dyn UnzipProgressReporter =
+                        options.progress_reporter.as_ref();
+                    let file = myzip.by_index(i)?;
+                    let name = file
+                        .enclosed_name()
+                        .map(Path::to_string_lossy)
+                        .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
+                        .to_string();
+                    extract_file_inner(
+                        file,
+                        &options.output_directory,
+                        progress_reporter,
+                        directory_creator,
+                    )
+                    .with_context(|| format!("Failed to extract {name}"))
+                })
+                .filter_map(Result::err)
+                .collect()
+        }
+        (Some(filename_filter), single_threaded) => {
+            // If we have a filename filter, an easy thing would be to
+            // iterate through each file index as above, and check to see if its
+            // name matches. Unfortunately, that seeks all over the place
+            // to get the filename from the local header.
+            // Instead, let's get a list of the filenames we need
+            // and request them from the zip library directly.
+            // As we can't predict their order in the file, this may involve
+            // arbitrary rewinds, so let's do it single-threaded.
+            if !single_threaded {
+                log::warn!("Unzipping specific files - assuming --single-threaded since we currently cannot unzip specific files in a multi-threaded mode. If you need that, consider launching multiple copies of ripunzip in parallel.");
+            }
+            let filenames: Vec<_> = get_ziparchive_clone()
+                .file_names()
+                .filter(|name| filename_filter.as_ref().should_unzip(name))
+                .map(|s| s.to_string())
+                .collect();
+            log::info!("Will unzip {} matching filenames", filenames.len());
+            let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
+            file_skip_callback();
 
-/// Extracts a file if it's on a list of files to unzip.
-fn extract_file_if_on_list<T: Read + Seek>(
-    myzip: &mut zip::ZipArchive<T>,
-    i: usize,
-    output_directory: &Option<PathBuf>,
-    filename_filter: &dyn FilenameFilter,
-    progress_reporter: &dyn UnzipProgressReporter,
-    directory_creator: &DirectoryCreator,
-    // Call when a file is going to be skipped
-    file_skip_callback: impl Fn(u64) + Sync + Send,
-) -> Result<()> {
-    let file = myzip.by_index(i)?;
-    let name = file
-        .enclosed_name()
-        .map(Path::to_string_lossy)
-        .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
-        .to_string();
-    let extract = filename_filter.should_unzip(&name);
-    if extract {
-        extract_file_inner(file, output_directory, progress_reporter, directory_creator)
-            .with_context(|| format!("Failed to extract {name}"))
-    } else {
-        file_skip_callback(file.compressed_size());
-        Ok(())
+            let progress_reporter: &dyn UnzipProgressReporter = options.progress_reporter.as_ref();
+            filenames
+                .into_iter()
+                .map(|name| {
+                    let file = myzip.by_name(&name)?;
+                    let name = file
+                        .enclosed_name()
+                        .map(Path::to_string_lossy)
+                        .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
+                        .to_string();
+                    let r = extract_file_inner(
+                        file,
+                        &options.output_directory,
+                        progress_reporter,
+                        directory_creator,
+                    )
+                    .with_context(|| format!("Failed to extract {name}"));
+                    file_skip_callback();
+                    r
+                })
+                .filter_map(Result::err)
+                .collect()
+        }
     }
 }
 
@@ -377,7 +379,7 @@ fn extract_file_inner(
     };
     let display_name = name.display().to_string();
     progress_reporter.extraction_starting(&display_name);
-    log::info!(
+    log::debug!(
         "Start extract of file at {:x}, length {:x}, name {}",
         file.data_start(),
         file.compressed_size(),
@@ -422,7 +424,7 @@ fn extract_file_inner(
                 .with_context(|| "Failed to set permissions")?;
         }
     }
-    log::info!(
+    log::debug!(
         "Finished extract of file at {:x}, length {:x}, name {}",
         file.data_start(),
         file.compressed_size(),
@@ -448,15 +450,6 @@ impl DirectoryCreator {
             return Ok(());
         }
         std::fs::create_dir_all(path).with_context(|| "Failed to create directory")
-    }
-}
-
-/// Filename filter which just says to unzip everything
-struct UnzipAllFilter;
-
-impl FilenameFilter for UnzipAllFilter {
-    fn should_unzip(&self, _filename: &str) -> bool {
-        true
     }
 }
 

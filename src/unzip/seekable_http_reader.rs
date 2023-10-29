@@ -126,7 +126,7 @@ struct State {
     /// can be doing a read at a time.
     read_in_progress: bool,
     /// We expect to skip some range of the read.
-    expect_skip_ahead: u64,
+    expect_skip_ahead: bool,
     /// Threshold for fast forwards when we'd expect to skip some data
     /// and decide to create a new stream.
     skip_ahead_threshold: u64,
@@ -161,7 +161,7 @@ impl State {
 
     /// Insert a block into our readahead cache.
     fn insert(&mut self, pos: u64, block: Vec<u8>) {
-        log::info!(
+        log::debug!(
             "Inserting into cache, block is 0x{:x}-0x{:x}",
             pos,
             pos + block.len() as u64
@@ -374,7 +374,7 @@ impl SeekableHttpReaderEngine {
         // Cases where you have READER but want STATE: after read,
         // ... but this deadlock can't happen because only one thread
         //     will enter this 'read in progress' block.
-        log::info!("Read: requested position 0x{:x}.", pos);
+        log::debug!("Read: requested position 0x{:x}.", pos);
 
         if pos == self.len {
             return Err(std::io::Error::new(
@@ -388,7 +388,7 @@ impl SeekableHttpReaderEngine {
         // Is there block in cache?
         // - If yes, release CACHE mutex, and return
         if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
-            log::info!("Immediate cache success");
+            log::debug!("Immediate cache success");
             return Ok(bytes_read_from_cache);
         }
         // - If no, check if read in progress
@@ -399,7 +399,7 @@ impl SeekableHttpReaderEngine {
             state = self.read_completed.wait(state).unwrap();
             //     check cache again
             if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
-                log::info!("Deferred cache success");
+                log::debug!("Deferred cache success");
                 return Ok(bytes_read_from_cache);
             }
             read_in_progress = state.read_in_progress;
@@ -410,7 +410,7 @@ impl SeekableHttpReaderEngine {
         state.read_in_progress = true;
         // If we need to read ahead,
         let expect_skip_ahead = state.expect_skip_ahead;
-        state.expect_skip_ahead = 0;
+        state.expect_skip_ahead = false;
         let skip_ahead_threshold = state.skip_ahead_threshold;
         let max_block = state.max_block;
         //     claim READER mutex
@@ -422,7 +422,7 @@ impl SeekableHttpReaderEngine {
         // and are expecting to skip over some significant data.
         if let Some((_, readerpos)) = reading_stuff.reader.as_ref() {
             if pos < *readerpos {
-                log::info!(
+                log::debug!(
                     "Rewinding: New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
                     pos,
                     *readerpos
@@ -434,9 +434,8 @@ impl SeekableHttpReaderEngine {
                 // AND we *expect* to be skipping ahead a lot. Otherwise it might be random
                 // seeks within an area backwards and forwards, and creating a new HTTP(S) stream
                 // is wasteful.
-                if delta > skip_ahead_threshold && expect_skip_ahead > skip_ahead_threshold {
-                    log::info!("Fast forwarding expected skip is 0x{:x}: New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
-                        expect_skip_ahead,
+                if delta > skip_ahead_threshold && expect_skip_ahead {
+                    log::debug!("Fast forwarding expected skip: New reader will be required at 0x{:x} - old reader pos was 0x{:x}",
                         pos,
                         *readerpos
                     );
@@ -446,7 +445,7 @@ impl SeekableHttpReaderEngine {
         }
         let mut reader_created = false;
         if reading_stuff.reader.is_none() {
-            log::info!("create_reader");
+            log::debug!("create_reader");
             reading_stuff.reader = Some((
                 BufReader::new(
                     reading_stuff
@@ -461,7 +460,7 @@ impl SeekableHttpReaderEngine {
 
         let (reader, reader_pos) = reading_stuff.reader.as_mut().unwrap();
         if pos > *reader_pos {
-            log::info!(
+            log::debug!(
                 "Read: reading ahead from 0x{:x} to 0x{:x} without skipping",
                 *reader_pos,
                 pos
@@ -488,7 +487,7 @@ impl SeekableHttpReaderEngine {
         let bytes_read = state
             .read_from_cache(pos, buf)
             .expect("Cache still couldn't satisfy request event after reading beyond read pos");
-        log::info!("Cache success after read");
+        log::debug!("Cache success after read");
         if reader_created {
             state.stats.num_http_streams += 1;
         }
@@ -513,7 +512,7 @@ impl SeekableHttpReaderEngine {
         if old_access_pattern == access_pattern {
             return;
         }
-        log::info!(
+        log::debug!(
             "Changing access pattern - current stats are {:?}",
             state.stats
         );
@@ -523,7 +522,7 @@ impl SeekableHttpReaderEngine {
             }
             // If we're switching to a sequential pattern, recreate
             // the reader at position zero.
-            log::info!("create_reader_at_zero");
+            log::debug!("create_reader_at_zero");
             {
                 let mut reading_materials = self.reader.lock().unwrap();
                 let new_reader = reading_materials.range_fetcher.fetch_range(0);
@@ -537,9 +536,9 @@ impl SeekableHttpReaderEngine {
     }
 
     /// Call this if we're going to skip over some part of the zip.
-    pub(crate) fn read_skip_expected(&self, skipping_by: u64) {
+    pub(crate) fn read_skip_expected(&self) {
         let mut state = self.state.lock().unwrap();
-        state.expect_skip_ahead += skipping_by;
+        state.expect_skip_ahead = true;
     }
 
     /// Return some statistics about the success (or otherwise) of this stream.
@@ -550,7 +549,7 @@ impl SeekableHttpReaderEngine {
 
 impl Drop for SeekableHttpReaderEngine {
     fn drop(&mut self) {
-        log::info!("Dropping: stats are {:?}", self.state.lock().unwrap().stats)
+        log::debug!("Dropping: stats are {:?}", self.state.lock().unwrap().stats)
     }
 }
 
@@ -748,7 +747,7 @@ mod tests {
             seekable_http_reader.read_exact(&mut throwaway).unwrap();
             assert_eq!(std::str::from_utf8(&throwaway).unwrap(), "0123");
             server.verify_and_clear();
-            seekable_http_reader_engine.read_skip_expected(6);
+            seekable_http_reader_engine.read_skip_expected();
             seekable_http_reader.seek(SeekFrom::Start(10)).unwrap();
             server.expect(get_range_expectation(10, 12));
             seekable_http_reader
@@ -786,7 +785,7 @@ mod tests {
                 Some(val) => {
                     let val = val.as_bytes();
                     let val = std::str::from_utf8(val).expect("Range header not UTF");
-                    log::info!("Got header {val}");
+                    log::debug!("Got header {val}");
                     let range_re = Regex::new("bytes=(\\d+)-(\\d+)").unwrap();
                     let captures = range_re.captures(val).expect("Unexpected Range header");
                     let start = str::parse::<usize>(captures.get(1).unwrap().as_str()).unwrap();
