@@ -316,11 +316,21 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
             if !single_threaded {
                 log::warn!("Unzipping specific files - assuming --single-threaded since we currently cannot unzip specific files in a multi-threaded mode. If you need that, consider launching multiple copies of ripunzip in parallel.");
             }
-            let filenames: Vec<_> = get_ziparchive_clone()
+            let mut filenames: Vec<_> = get_ziparchive_clone()
                 .file_names()
                 .filter(|name| filename_filter.as_ref().should_unzip(name))
                 .map(|s| s.to_string())
                 .collect();
+            // The filenames returned by the file_names() method above are in
+            // HashMap iteration order (i.e. random). To avoid creating lots
+            // of HTTPS streams for files which are nearby each other in the
+            // zip, we'd ideally extract them in order of file position.
+            // We have no way of knowing file position (without iterating the
+            // whole file) so instead let's sort them and hope that files were
+            // zipped in alphabetical order, or close to it. If we're wrong,
+            // we'll just end up rewinding, that is, creating extra redundant
+            // HTTP(S) streams.
+            filenames.sort();
             log::info!("Will unzip {} matching filenames", filenames.len());
             file_skip_callback();
 
