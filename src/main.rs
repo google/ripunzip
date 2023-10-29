@@ -13,7 +13,9 @@ use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf, sync::RwLoc
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use ripunzip::{FilenameFilter, UnzipEngine, UnzipOptions, UnzipProgressReporter};
+use ripunzip::{
+    FilenameFilter, NullProgressReporter, UnzipEngine, UnzipOptions, UnzipProgressReporter,
+};
 
 /// Unzip all files within a zip file as quickly as possible.
 #[derive(Parser, Debug)]
@@ -109,15 +111,23 @@ fn main() -> Result<()> {
         Commands::UnzipFile {
             file_args,
             unzip_args,
-        } => unzip(construct_file_engine(file_args)?, unzip_args),
+        } => unzip(
+            construct_file_engine(file_args)?,
+            unzip_args,
+            args.verbose.is_silent(),
+        ),
         Commands::UnzipUri {
             uri_args,
             unzip_args,
-        } => unzip(construct_uri_engine(uri_args)?, unzip_args),
+        } => unzip(
+            construct_uri_engine(uri_args)?,
+            unzip_args,
+            args.verbose.is_silent(),
+        ),
     }
 }
 
-fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs) -> Result<()> {
+fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs, is_silent: bool) -> Result<()> {
     let filename_filter: Option<Box<dyn FilenameFilter + Sync>> =
         if unzip_args.filenames_to_unzip.is_empty() {
             None
@@ -126,11 +136,16 @@ fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs) -> Result<()> {
                 unzip_args.filenames_to_unzip.clone().into_iter().collect(),
             ))))
         };
+    let progress_reporter: Box<dyn UnzipProgressReporter + Sync> = if is_silent {
+        Box::new(NullProgressReporter)
+    } else {
+        Box::new(ProgressDisplayer::new())
+    };
     let options = UnzipOptions {
         output_directory: unzip_args.output_directory,
         single_threaded: unzip_args.single_threaded,
         filename_filter,
-        progress_reporter: Box::new(ProgressDisplayer::new()),
+        progress_reporter,
     };
     engine.unzip(options)
 }
