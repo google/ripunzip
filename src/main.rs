@@ -13,14 +13,23 @@ use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf, sync::RwLoc
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use ripunzip::{FilenameFilter, UnzipEngine, UnzipOptions, UnzipProgressReporter};
+use ripunzip::{
+    FilenameFilter, NullProgressReporter, UnzipEngine, UnzipOptions, UnzipProgressReporter,
+};
+
+const LONG_ABOUT: &str =
+    "ripunzip is a tool to unzip zip files in parallel, possibly from a remote server. 
+It works best with HTTP(S) servers that support Range requests.";
 
 /// Unzip all files within a zip file as quickly as possible.
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = LONG_ABOUT)]
 struct RipunzipArgs {
     #[command(subcommand)]
     command: Commands,
+
+    #[command(flatten)]
+    verbose: clap_verbosity_flag::Verbosity,
 }
 
 #[derive(Subcommand, Debug)]
@@ -96,38 +105,33 @@ struct UriArgs {
 }
 
 fn main() -> Result<()> {
-    use std::io::Write;
-
-    env_logger::builder()
-        .format(|buf, record| {
-            let ts = buf.timestamp_micros();
-            writeln!(
-                buf,
-                "{}: {:?}: {}: {}",
-                ts,
-                std::thread::current().id(),
-                buf.default_level_style(record.level())
-                    .value(record.level()),
-                record.args()
-            )
-        })
-        .init();
     let args = RipunzipArgs::parse();
+    env_logger::Builder::new()
+        .filter_level(args.verbose.log_level_filter())
+        .init();
     match args.command {
         Commands::ListFile { file_args } => list(construct_file_engine(file_args)?),
         Commands::ListUri { uri_args } => list(construct_uri_engine(uri_args)?),
         Commands::UnzipFile {
             file_args,
             unzip_args,
-        } => unzip(construct_file_engine(file_args)?, unzip_args),
+        } => unzip(
+            construct_file_engine(file_args)?,
+            unzip_args,
+            args.verbose.is_silent(),
+        ),
         Commands::UnzipUri {
             uri_args,
             unzip_args,
-        } => unzip(construct_uri_engine(uri_args)?, unzip_args),
+        } => unzip(
+            construct_uri_engine(uri_args)?,
+            unzip_args,
+            args.verbose.is_silent(),
+        ),
     }
 }
 
-fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs) -> Result<()> {
+fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs, is_silent: bool) -> Result<()> {
     let filename_filter: Option<Box<dyn FilenameFilter + Sync>> =
         if unzip_args.filenames_to_unzip.is_empty() {
             None
@@ -136,11 +140,16 @@ fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs) -> Result<()> {
                 unzip_args.filenames_to_unzip.clone().into_iter().collect(),
             ))))
         };
+    let progress_reporter: Box<dyn UnzipProgressReporter + Sync> = if is_silent {
+        Box::new(NullProgressReporter)
+    } else {
+        Box::new(ProgressDisplayer::new())
+    };
     let options = UnzipOptions {
         output_directory: unzip_args.output_directory,
         single_threaded: unzip_args.single_threaded,
         filename_filter,
-        progress_reporter: Box::new(ProgressDisplayer::new()),
+        progress_reporter,
     };
     engine.unzip(options)
 }
