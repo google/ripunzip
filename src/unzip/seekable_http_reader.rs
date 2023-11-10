@@ -210,9 +210,6 @@ impl State {
             let block_offset = pos as usize - *possible_block_start as usize;
             let to_read = min(buf.len(), block_len - block_offset);
             buf[..to_read].copy_from_slice(block.read(block_offset..to_read + block_offset));
-            block.bytes_read += to_read;
-            // TODO - fix bug where bytes_read is incremented even if there's
-            // a rewind and we read the same bytes several times
             self.stats.cache_hits += 1;
             if discard_read_data && block.entirely_consumed() {
                 // Discard this block, but outside this loop
@@ -615,7 +612,28 @@ mod tests {
 
     use crate::unzip::seekable_http_reader::DEFAULT_MAX_BLOCK;
 
-    use super::{AccessPattern, SeekableHttpReaderEngine};
+    use super::{AccessPattern, CacheCell, SeekableHttpReaderEngine};
+
+    #[test]
+    fn test_cachecell() {
+        let mut cell = CacheCell::new(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(cell.len(), 10);
+        assert!(!cell.entirely_consumed());
+
+        assert_eq!(cell.read(0..2), &[0, 1]);
+        assert!(!cell.entirely_consumed());
+
+        assert_eq!(cell.read(3..10), &[3, 4, 5, 6, 7, 8, 9]);
+        assert!(!cell.entirely_consumed());
+
+        // Re-read some already-read bytes - still not entirely consumed.
+        assert_eq!(cell.read(0..2), &[0, 1]);
+        assert!(!cell.entirely_consumed());
+
+        // Finally read that last byte.
+        assert_eq!(cell.read(1..4), &[1, 2, 3]);
+        assert!(cell.entirely_consumed());
+    }
 
     #[test]
     fn test_unlimited_readahead() {
