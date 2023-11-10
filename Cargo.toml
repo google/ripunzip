@@ -15,6 +15,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 description = "A tool to unzip an archive in parallel"
 repository = "https://github.com/google/ripunzip"
+rust-version = "1.60"
 
 [features]
 real_world_benchmark = []
