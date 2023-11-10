@@ -674,7 +674,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut seekable_http_reader = seekable_http_reader_engine.clone().create_reader();
+        let mut seekable_http_reader = seekable_http_reader_engine.create_reader();
         server.verify_and_clear();
 
         let mut throwaway = [0u8; 4];
