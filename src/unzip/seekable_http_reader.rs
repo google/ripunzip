@@ -564,23 +564,33 @@ pub(crate) struct SeekableHttpReader {
 
 impl Seek for SeekableHttpReader {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        // TODO used checked arithmetic when stabilized
         self.pos = match pos {
             SeekFrom::Start(pos) => pos,
             SeekFrom::End(pos) => {
-                if -pos > self.engine.len() as i64 {
-                    return Err(std::io::Error::new(
+                let positive_pos: u64 = (-pos).try_into().map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::Unsupported, "Seeked beyond end")
+                })?;
+                self.engine
+                    .len()
+                    .checked_sub(positive_pos)
+                    .ok_or(std::io::Error::new(
                         std::io::ErrorKind::Unsupported,
                         "Rewind too far",
-                    ));
-                }
-                self.engine.len() - ((-pos) as u64)
+                    ))?
             }
             SeekFrom::Current(offset_from_pos) => {
-                if offset_from_pos > 0 {
-                    self.pos + (offset_from_pos as u64)
-                } else {
-                    self.pos - ((-offset_from_pos) as u64)
+                let offset_from_pos_u64: Result<u64, _> = offset_from_pos.try_into();
+                match offset_from_pos_u64 {
+                    Ok(positive_offset) => self.pos + positive_offset,
+                    Err(_) => {
+                        let negative_offset = -offset_from_pos as u64;
+                        self.pos
+                            .checked_sub(negative_offset)
+                            .ok_or(std::io::Error::new(
+                                std::io::ErrorKind::Unsupported,
+                                "Rewind too far",
+                            ))?
+                    }
                 }
             }
         };
