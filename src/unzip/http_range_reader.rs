@@ -124,7 +124,10 @@ mod tests {
                 .times(..)
                 .respond_with(RangeAwareResponse::new(
                     200,
-                    RangeAwareResponseType::Body(hyper::body::Bytes::from(body)),
+                    RangeAwareResponseType::Body {
+                        body: hyper::body::Bytes::from(body),
+                        expected_range: None,
+                    },
                 ))
         } else {
             Expectation::matching(request::method_path("HEAD", "/foo"))
@@ -142,7 +145,10 @@ mod tests {
                 .times(..)
                 .respond_with(RangeAwareResponse::new(
                     206,
-                    RangeAwareResponseType::Body(hyper::body::Bytes::from(body)),
+                    RangeAwareResponseType::Body {
+                        body: hyper::body::Bytes::from(body),
+                        expected_range: None,
+                    },
                 ))
         } else {
             Expectation::matching(any())

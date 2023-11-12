@@ -29,7 +29,16 @@ use zip::{write::FileOptions, ZipWriter};
 /// How to respond to a range-aware request.
 pub enum RangeAwareResponseType {
     LengthOnly(usize),
-    Body(hyper::body::Bytes),
+    Body {
+        body: hyper::body::Bytes,
+        expected_range: Option<ExpectedRange>,
+    },
+}
+
+/// The range we expect to read. If it's different from this, assert failure.
+pub struct ExpectedRange {
+    pub expected_start: u64,
+    pub expected_end: u64,
 }
 
 /// A response for use with `httptest` which is aware of HTTP ranges.
@@ -50,17 +59,17 @@ impl httptest::responders::Responder for RangeAwareResponse {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = httptest::http::Response<hyper::Body>> + Send + 'a>,
     > {
-        async fn _respond(resp: http::Response<hyper::Body>) -> http::Response<hyper::Body> {
-            resp
-        }
         let mut builder = http::Response::builder();
         builder = builder
             .status(StatusCode::from_u16(self.0).unwrap())
             .version(Version::HTTP_2)
             .header("Accept-Ranges", "bytes");
-        let (body, content_length) = match &self.1 {
+        let (body, content_length): (Option<hyper::body::Bytes>, _) = match &self.1 {
             RangeAwareResponseType::LengthOnly(len) => (None, *len),
-            RangeAwareResponseType::Body(body) => {
+            RangeAwareResponseType::Body {
+                body,
+                expected_range,
+            } => {
                 let (body, content_length) =
                     if let Some(range) = req.headers().get(http::header::RANGE) {
                         let range_regex = Regex::new(r"bytes=(\d+)-(\d+)").unwrap();
@@ -73,21 +82,34 @@ impl httptest::responders::Responder for RangeAwareResponse {
                                 .get(2)
                                 .and_then(|s| s.as_str().parse::<usize>().ok())
                                 .unwrap();
+
+                            if let Some(expected_range) = expected_range {
+                                assert_eq!(
+                                    expected_range.expected_start, from as u64,
+                                    "Unexpected start location"
+                                );
+                                assert_eq!(
+                                    expected_range.expected_end, to as u64,
+                                    "Unexpected end location"
+                                );
+                            }
                             (body.slice(from..to), to - from)
                         } else {
+                            assert!(expected_range.is_none());
                             (body.clone(), body.len())
                         }
                     } else {
+                        assert!(expected_range.is_none());
                         (body.clone(), body.len())
                     };
                 (Some(body), content_length)
             }
         };
-        let resp = builder
+        builder
             .header("Content-Length", format!("{content_length}"))
-            .body(body.unwrap_or_default().into())
-            .unwrap();
-        Box::pin(_respond(resp))
+            .body(body.unwrap_or_default())
+            .unwrap()
+            .respond(req)
     }
 }
 
@@ -155,7 +177,10 @@ pub fn set_up_server(server: &Server, zip_data: Vec<u8>, server_type: ServerType
                     .times(..)
                     .respond_with(RangeAwareResponse::new(
                         206,
-                        RangeAwareResponseType::Body(hyper::body::Bytes::from(zip_data)),
+                        RangeAwareResponseType::Body {
+                            body: hyper::body::Bytes::from(zip_data),
+                            expected_range: None,
+                        },
                     )),
             );
         }

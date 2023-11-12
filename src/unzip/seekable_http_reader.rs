@@ -614,11 +614,11 @@ impl HasLength for SeekableHttpReader {
 
 #[cfg(test)]
 mod tests {
-    use regex::Regex;
+    use ripunzip_test_utils::{ExpectedRange, RangeAwareResponse, RangeAwareResponseType};
     use std::io::{Read, Seek, SeekFrom};
     use test_log::test;
 
-    use httptest::{matchers::*, responders::*, Expectation, Server};
+    use httptest::{matchers::*, Expectation, Server};
 
     use crate::unzip::seekable_http_reader::DEFAULT_MAX_BLOCK;
 
@@ -667,16 +667,25 @@ mod tests {
     }
 
     fn get_head_expectation() -> Expectation {
-        Expectation::matching(request::method_path("HEAD", "/foo"))
-            .respond_with(RangeAwareResponder::expected_range(0, 12))
+        Expectation::matching(request::method_path("HEAD", "/foo")).respond_with(
+            RangeAwareResponse::new(200, RangeAwareResponseType::LengthOnly(12)),
+        )
     }
+
+    const TEST_BODY: &[u8] = "0123456789AB".as_bytes();
 
     fn get_range_expectation(expected_start: u64, expected_end: u64) -> Expectation {
         Expectation::matching(request::method_path("GET", "/foo"))
             .times(1..)
-            .respond_with(RangeAwareResponder::expected_range(
-                expected_start,
-                expected_end,
+            .respond_with(RangeAwareResponse::new(
+                206,
+                RangeAwareResponseType::Body {
+                    body: TEST_BODY.into(),
+                    expected_range: Some(ExpectedRange {
+                        expected_start,
+                        expected_end,
+                    }),
+                },
             ))
     }
 
@@ -787,57 +796,6 @@ mod tests {
                 .unwrap();
             assert_eq!(std::str::from_utf8(&throwaway[0..2]).unwrap(), "AB");
             server.verify_and_clear();
-        }
-    }
-
-    struct RangeAwareResponder {
-        expected_start: u64,
-        expected_end: u64,
-    }
-
-    impl RangeAwareResponder {
-        fn expected_range(expected_start: u64, expected_end: u64) -> Self {
-            Self {
-                expected_start,
-                expected_end,
-            }
-        }
-    }
-
-    impl httptest::responders::Responder for RangeAwareResponder {
-        fn respond<'a>(
-            &mut self,
-            req: &'a http::Request<httptest::bytes::Bytes>,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = http::Response<hyper::Body>> + Send + 'a>,
-        > {
-            let body = "0123456789AB";
-            let (start, end) = match req.headers().get("Range") {
-                None => (0usize, body.len()),
-                Some(val) => {
-                    let val = val.as_bytes();
-                    let val = std::str::from_utf8(val).expect("Range header not UTF");
-                    log::debug!("Got header {val}");
-                    let range_re = Regex::new("bytes=(\\d+)-(\\d+)").unwrap();
-                    let captures = range_re.captures(val).expect("Unexpected Range header");
-                    let start = str::parse::<usize>(captures.get(1).unwrap().as_str()).unwrap();
-                    let end = str::parse::<usize>(captures.get(2).unwrap().as_str()).unwrap();
-                    (start, end)
-                }
-            };
-            assert_eq!(
-                self.expected_start, start as u64,
-                "Unexpected start location"
-            );
-            assert_eq!(self.expected_end, end as u64, "Unexpected end location");
-            let content_length = end - start;
-            let whole_body = "0123456789AB";
-            let body = &whole_body[start..end];
-            status_code(200)
-                .insert_header("Accept-Ranges", "bytes")
-                .insert_header("Content-Length", format!("{content_length}"))
-                .body(body)
-                .respond(req)
         }
     }
 }
