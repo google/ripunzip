@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, fmt::Write, fs::File, path::PathBuf, sync::RwLock};
+use std::{fmt::Write, fs::File, path::PathBuf, sync::RwLock};
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -16,6 +16,7 @@ use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use ripunzip::{
     FilenameFilter, NullProgressReporter, UnzipEngine, UnzipOptions, UnzipProgressReporter,
 };
+use wildmatch::WildMatch;
 
 const LONG_ABOUT: &str =
     "ripunzip is a tool to unzip zip files in parallel, possibly from a remote server. 
@@ -78,7 +79,7 @@ struct UnzipArgs {
     single_threaded: bool,
 
     /// Optionally, a list of files to unzip from the zip file. Omit
-    /// to unzip all of them.
+    /// to unzip all of them. This can include wildcards.
     #[arg(value_name = "FILES")]
     filenames_to_unzip: Vec<String>,
 }
@@ -137,7 +138,11 @@ fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs, is_silent: bool) -> Result<
             None
         } else {
             Some(Box::new(FileListFilter(RwLock::new(
-                unzip_args.filenames_to_unzip.clone().into_iter().collect(),
+                unzip_args
+                    .filenames_to_unzip
+                    .iter()
+                    .map(|s| WildMatch::new(s))
+                    .collect(),
             ))))
         };
     let progress_reporter: Box<dyn UnzipProgressReporter + Sync> = if is_silent {
@@ -175,12 +180,12 @@ fn list(engine: UnzipEngine) -> Result<()> {
     Ok(())
 }
 
-struct FileListFilter(RwLock<HashSet<String>>);
+struct FileListFilter(RwLock<Vec<WildMatch>>);
 
 impl FilenameFilter for FileListFilter {
     fn should_unzip(&self, filename: &str) -> bool {
         let lock = self.0.read().unwrap();
-        lock.contains(filename)
+        lock.iter().any(|m| m.matches(filename))
     }
 }
 
@@ -211,5 +216,31 @@ impl UnzipProgressReporter for ProgressDisplayer {
 
     fn bytes_extracted(&self, count: u64) {
         self.0.inc(count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::RwLock;
+
+    use ripunzip::FilenameFilter;
+    use wildmatch::WildMatch;
+
+    use crate::FileListFilter;
+
+    #[test]
+    fn test_filelist_filter() {
+        let patterns = &["dog", "cat", "mo?se", "ca*s"];
+        let filter = FileListFilter(RwLock::new(
+            patterns.iter().map(|p| WildMatch::new(p)).collect(),
+        ));
+        assert!(filter.should_unzip("dog"));
+        assert!(!filter.should_unzip("dogs"));
+        assert!(filter.should_unzip("cat"));
+        assert!(filter.should_unzip("capybaras"));
+        assert!(filter.should_unzip("cats"));
+        assert!(filter.should_unzip("mouse"));
+        assert!(filter.should_unzip("moose"));
+        assert!(!filter.should_unzip("mouuuuuse"));
     }
 }
