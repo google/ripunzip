@@ -1455,6 +1455,7 @@ dependencies = [
  "tempfile",
  "test-log",
  "thiserror",
+ "wildmatch",
  "zip",
 ]
 
@@ -2071,6 +2072,12 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "wildmatch"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee583bdc5ff1cf9db20e9db5bb3ff4c3089a8f6b8b31aff265c9aba85812db86"
 
 [[package]]
 name = "winapi"
