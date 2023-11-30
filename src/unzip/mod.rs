@@ -23,9 +23,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use zip::{read::ZipFile, ZipArchive};
 
-use crate::unzip::{
-    cloneable_seekable_reader::CloneableSeekableReader, progress_updater::ProgressUpdater,
-};
+use crate::unzip::progress_updater::ProgressUpdater;
 
 use self::{
     cloneable_seekable_reader::HasLength,
@@ -99,9 +97,9 @@ trait UnzipEngineImpl {
 
 /// Engine which knows how to unzip a file.
 #[derive(Clone)]
-struct UnzipFileEngine(ZipArchive<CloneableSeekableReader<File>>);
+struct UnzipFileEngine<'a>(ZipArchive<positioned_io::SizeCursor<&'a File>>);
 
-impl UnzipEngineImpl for UnzipFileEngine {
+impl<'a> UnzipEngineImpl for UnzipFileEngine<'a> {
     fn unzip(
         &mut self,
         options: UnzipOptions,
@@ -164,7 +162,8 @@ impl UnzipEngine {
         // performance difference.
         // let zipfile = BufReader::new(zipfile);
         let compressed_length = zipfile.len();
-        let zipfile = CloneableSeekableReader::new(zipfile);
+        let zipfile = Box::leak(Box::new(zipfile));
+        let zipfile = positioned_io::SizeCursor::new(&*zipfile);
         Ok(Self {
             zipfile: Box::new(UnzipFileEngine(ZipArchive::new(zipfile)?)),
             compressed_length,
@@ -207,13 +206,13 @@ impl UnzipEngine {
                     // file then unzipping.
                     log::warn!("HTTP(S) server does not support range requests - falling back to fetching whole file.");
                     let mut response = reqwest::blocking::get(uri)?;
-                    let mut tempfile = tempfile::tempfile()?;
+                    let mut tempfile = Box::leak(Box::new(tempfile::tempfile()?));
                     std::io::copy(&mut response, &mut tempfile)?;
                     let compressed_length = tempfile.len();
-                    let zipfile = CloneableSeekableReader::new(tempfile);
+                    let zipfile = positioned_io::SizeCursor::new(&*tempfile);
                     (
                         compressed_length,
-                        Box::new(UnzipFileEngine(ZipArchive::new(zipfile)?)),
+                        Box::new(UnzipFileEngine(ZipArchive::new(zipfile).unwrap())),
                     )
                 }
             };
