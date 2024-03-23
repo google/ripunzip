@@ -56,7 +56,7 @@ enum Commands {
         uri_args: UriArgs,
     },
 
-    /// Unzips a zip file from a URO
+    /// Unzips a zip file from a URI
     UnzipUri {
         #[command(flatten)]
         uri_args: UriArgs,
