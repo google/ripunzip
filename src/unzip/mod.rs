@@ -343,7 +343,15 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                 .into_iter()
                 .map(|name| {
                     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
-                    let file = myzip.by_name(&name)?;
+                    let file: ZipFile;
+                    match &options.password {
+                        None => {
+                            file = myzip.by_name(&name)?;
+                        }
+                        Some(string) => {
+                            file = myzip.by_name_decrypt(&name, string.as_bytes())??;
+                        }
+                    }
                     let r = extract_file(
                         file,
                         &options.output_directory,
@@ -368,14 +376,15 @@ fn extract_file_by_index<'a, T: Read + Seek + 'a>(
     directory_creator: &DirectoryCreator,
 ) -> Result<(), anyhow::Error> {
     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
+    let file: ZipFile;
     match password {
         None => {
-            let file = myzip.by_index(i)?;
+            file = myzip.by_index(i)?;
             extract_file(file, output_directory, progress_reporter, directory_creator)
 
         }
         Some(string) => {
-            let file = myzip.by_index_decrypt(i, string.as_bytes())??;
+            file = myzip.by_index_decrypt(i, string.as_bytes())??;
             extract_file(file, output_directory, progress_reporter, directory_creator)
         }
     }
