@@ -504,6 +504,7 @@ mod tests {
         io::{Cursor, Seek, Write},
         path::Path,
     };
+    use std::path::PathBuf;
     use tempfile::tempdir;
     use test_log::test;
     use zip::{write::FileOptions, ZipWriter};
@@ -597,6 +598,26 @@ mod tests {
             let options = UnzipOptions {
                 output_directory: Some(outdir.clone()),
                 password: None,
+                single_threaded: false,
+                filename_filter,
+                progress_reporter: Box::new(NullProgressReporter),
+            };
+            UnzipEngine::for_file(zf).unwrap().unzip(options).unwrap();
+            check_files_exist(&outdir, create_a);
+        });
+    }
+
+    #[test]
+    fn test_extract_with_path_with_password() {
+        run_with_and_without_a_filename_filter(|create_a, filename_filter| {
+            let td = tempdir().unwrap();
+            let mut zf = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            zf.push("test_resources/z_with_password.zip");
+            let zf = File::open(zf).unwrap();
+            let outdir = td.path().join("outdir");
+            let options = UnzipOptions {
+                output_directory: Some(outdir.clone()),
+                password: Some("1Password".to_string()),
                 single_threaded: false,
                 filename_filter,
                 progress_reporter: Box::new(NullProgressReporter),
