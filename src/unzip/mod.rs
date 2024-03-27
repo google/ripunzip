@@ -278,6 +278,7 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                     &get_ziparchive_clone,
                     i,
                     &options.output_directory,
+                    &options.password,
                     progress_reporter,
                     directory_creator,
                 )
@@ -299,6 +300,7 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                         &get_ziparchive_clone,
                         i,
                         &options.output_directory,
+                        &options.password,
                         progress_reporter,
                         directory_creator,
                     )
@@ -361,12 +363,22 @@ fn extract_file_by_index<'a, T: Read + Seek + 'a>(
     get_ziparchive_clone: impl Fn() -> ZipArchive<T> + Sync,
     i: usize,
     output_directory: &Option<PathBuf>,
+    password: &Option<String>,
     progress_reporter: &dyn UnzipProgressReporter,
     directory_creator: &DirectoryCreator,
 ) -> Result<(), anyhow::Error> {
     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
-    let file = myzip.by_index(i)?;
-    extract_file(file, output_directory, progress_reporter, directory_creator)
+    match password {
+        None => {
+            let file = myzip.by_index(i)?;
+            extract_file(file, output_directory, progress_reporter, directory_creator)
+
+        }
+        Some(string) => {
+            let file = myzip.by_index_decrypt(i, string.as_bytes())??;
+            extract_file(file, output_directory, progress_reporter, directory_creator)
+        }
+    }
 }
 
 fn extract_file(
