@@ -73,6 +73,10 @@ struct UnzipArgs {
     #[arg(short = 'd', long, value_name = "DIRECTORY")]
     output_directory: Option<PathBuf>,
 
+    /// Password to decrypt encrypted zipfile entries (if any).  THIS IS INSECURE!
+    #[arg(short = 'P', long, value_name = "PASSWORD")]
+    password: Option<String>,
+
     /// Whether to decompress on a single thread. By default,
     /// multiple threads are used, but this can lead to more network traffic.
     #[arg(long)]
@@ -152,6 +156,7 @@ fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs, is_silent: bool) -> Result<
     };
     let options = UnzipOptions {
         output_directory: unzip_args.output_directory,
+        password: unzip_args.password,
         single_threaded: unzip_args.single_threaded,
         filename_filter,
         progress_reporter,

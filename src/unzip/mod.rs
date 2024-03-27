@@ -36,6 +36,8 @@ use self::{
 pub struct UnzipOptions {
     /// The destination directory.
     pub output_directory: Option<PathBuf>,
+    /// Password if encrypted.
+    pub password: Option<String>,
     /// Whether to run in single-threaded mode.
     pub single_threaded: bool,
     /// A filename filter, optionally
@@ -552,6 +554,7 @@ mod tests {
             set_current_dir(td.path()).unwrap();
             let options = UnzipOptions {
                 output_directory: None,
+                password: None,
                 single_threaded: false,
                 filename_filter,
                 progress_reporter: Box::new(NullProgressReporter),
@@ -572,6 +575,7 @@ mod tests {
             let outdir = td.path().join("outdir");
             let options = UnzipOptions {
                 output_directory: Some(outdir.clone()),
+                password: None,
                 single_threaded: false,
                 filename_filter,
                 progress_reporter: Box::new(NullProgressReporter),
@@ -617,6 +621,7 @@ mod tests {
             let outdir = td.path().join("outdir");
             let options = UnzipOptions {
                 output_directory: Some(outdir.clone()),
+                password: None,
                 single_threaded: false,
                 filename_filter,
                 progress_reporter: Box::new(NullProgressReporter),
@@ -639,6 +644,7 @@ mod tests {
         let outdir = td.path().join("outdir");
         let options = UnzipOptions {
             output_directory: Some(outdir),
+            password: None,
             single_threaded: false,
             filename_filter: None,
             progress_reporter: Box::new(NullProgressReporter),
