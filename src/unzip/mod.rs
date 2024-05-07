@@ -33,15 +33,15 @@ use self::{
 };
 
 /// Options for unzipping.
-pub struct UnzipOptions {
+pub struct UnzipOptions<'a, 'b> {
     /// The destination directory.
     pub output_directory: Option<PathBuf>,
     /// Whether to run in single-threaded mode.
     pub single_threaded: bool,
     /// A filename filter, optionally
-    pub filename_filter: Option<Box<dyn FilenameFilter + Sync>>,
+    pub filename_filter: Option<Box<dyn FilenameFilter + Sync + 'a>>,
     /// An object to receive notifications of unzip progress.
-    pub progress_reporter: Box<dyn UnzipProgressReporter + Sync>,
+    pub progress_reporter: Box<dyn UnzipProgressReporter + Sync + 'b>,
 }
 
 /// A trait of types which wish to hear progress updates on the unzip.
