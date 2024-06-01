@@ -828,4 +828,11 @@ mod tests {
             server.verify_and_clear();
         }
     }
+
+    // It would be highly desirable to enhance these tests with:
+    // * tests of what happens if the server refuses a connection at any
+    //   point.
+    // * tests of what happens if the server closes a connection part way
+    //   through
+    // * multi-threaded tests
 }
