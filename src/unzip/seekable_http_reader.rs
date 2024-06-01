@@ -136,6 +136,9 @@ struct State {
     /// this. If it's absent, some other thread is doing a read, and
     /// you may not.
     reader: Option<Box<ReadingMaterials>>,
+    /// Some problem was encountered creating a reader.
+    /// All threads should abandon hope.
+    reader_creation_err: bool,
 }
 
 impl State {
@@ -388,6 +391,12 @@ impl SeekableHttpReaderEngine {
         while reading_stuff.is_none() {
             //   - If yes, release CACHE mutex, WAIT on condvar atomically
             state = self.read_completed.wait(state).unwrap();
+            if state.reader_creation_err {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "another thread experienced a problem creating a reader",
+                ));
+            }
             //     check cache again
             if let Some(bytes_read_from_cache) = state.read_from_cache(pos, buf) {
                 log::debug!("Deferred cache success");
@@ -438,16 +447,25 @@ impl SeekableHttpReaderEngine {
         let mut reader_created = false;
         if reading_stuff.reader.is_none() {
             log::debug!("create_reader");
-            reading_stuff.reader = Some((
-                BufReader::new(
-                    reading_stuff
-                        .range_fetcher
-                        .fetch_range(pos)
-                        .map_err(|e| std::io::Error::new(ErrorKind::Unsupported, e.to_string()))?,
-                ),
-                pos,
-            ));
-            reader_created = true;
+
+            let new_reader = reading_stuff
+                .range_fetcher
+                .fetch_range(pos)
+                .map_err(|e| std::io::Error::new(ErrorKind::Unsupported, e.to_string()));
+
+            match new_reader {
+                Ok(new_reader) => {
+                    reading_stuff.reader = Some((BufReader::new(new_reader), pos));
+                    reader_created = true;
+                }
+                Err(err) => {
+                    let mut state = self.state.lock().unwrap();
+                    state.reader_creation_err = true;
+                    // Tell any waiting threads that they might have an issue
+                    self.read_completed.notify_all();
+                    return Err(err);
+                }
+            }
         };
 
         let (reader, reader_pos) = reading_stuff.reader.as_mut().unwrap();
