@@ -168,18 +168,16 @@ fn unzip<EngineImpl: UnzipEngineImpl>(
                     .collect(),
             ))))
         };
-    let progress_reporter: Box<dyn UnzipProgressReporter + Sync> = if is_silent {
-        Box::new(NullProgressReporter)
-    } else {
-        Box::new(ProgressDisplayer::new())
-    };
     let options = UnzipOptions {
         output_directory: unzip_args.output_directory,
         single_threaded: unzip_args.single_threaded,
         filename_filter,
-        progress_reporter,
     };
-    engine.unzip(options)
+    if is_silent {
+        engine.unzip(options, NullProgressReporter)
+    } else {
+        engine.unzip(options, ProgressDisplayer::new())
+    }
 }
 
 fn construct_file_engine(file_args: FileArgs) -> Result<UnzipEngine<UnzipFileEngine>> {
