@@ -15,9 +15,12 @@ use std::{
 /// A trait to represent some reader which has a total length known in
 /// advance. This is roughly equivalent to the nightly
 /// [`Seek::stream_len`] API.
-pub(crate) trait HasLength {
+pub trait HasLength {
     /// Return the current total length of this stream.
     fn len(&self) -> u64;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 struct Inner<R: Read + Seek + HasLength> {
@@ -67,7 +70,7 @@ impl<R: Read + Seek + HasLength> Inner<R> {
 /// and thus can be cloned cheaply. It supports seeking; each cloned instance
 /// maintains its own pointer into the file, and the underlying instance
 /// is seeked prior to each read.
-pub(crate) struct CloneableSeekableReader<R: Read + Seek + HasLength> {
+pub struct CloneableSeekableReader<R: Read + Seek + HasLength> {
     /// The wrapper around the Read implementation, shared between threads.
     inner: Arc<Mutex<Inner<R>>>,
     /// The position of _this_ reader.
@@ -89,7 +92,7 @@ impl<R: Read + Seek + HasLength> CloneableSeekableReader<R> {
     /// to be fixed and unchanging. Odd behavior may occur if the length
     /// of the stream changes; any subsequent seeks will not take account
     /// of the changed stream length.
-    pub(crate) fn new(r: R) -> Self {
+    pub fn new(r: R) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner::new(r))),
             pos: 0u64,

@@ -92,7 +92,7 @@ impl CacheCell {
         &self.data[range]
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.data.len()
     }
 

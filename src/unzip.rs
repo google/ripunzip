@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-mod cloneable_seekable_reader;
+pub mod cloneable_seekable_reader;
 mod http_range_reader;
 mod progress_updater;
 mod seekable_http_reader;
@@ -72,10 +72,10 @@ impl UnzipProgressReporter for NullProgressReporter {}
 /// An object which can unzip a zip file, in its entirety, from a local
 /// file or from a network stream. It tries to do this in parallel wherever
 /// possible.
-pub struct UnzipEngine {
-    zipfile: Box<dyn UnzipEngineImpl>,
-    compressed_length: u64,
-    directory_creator: DirectoryCreator,
+pub struct UnzipEngine<EngineImpl: UnzipEngineImpl> {
+    pub zipfile: EngineImpl,
+    pub compressed_length: u64,
+    pub directory_creator: DirectoryCreator,
 }
 
 /// Code which can determine whether to unzip a given filename.
@@ -86,7 +86,7 @@ pub trait FilenameFilter {
 
 /// The underlying engine used by the unzipper. This is different
 /// for files and URIs.
-trait UnzipEngineImpl {
+pub trait UnzipEngineImpl {
     fn unzip(
         &mut self,
         options: UnzipOptions,
@@ -99,7 +99,7 @@ trait UnzipEngineImpl {
 
 /// Engine which knows how to unzip a file.
 #[derive(Clone)]
-struct UnzipFileEngine(ZipArchive<CloneableSeekableReader<File>>);
+pub struct UnzipFileEngine(pub ZipArchive<CloneableSeekableReader<File>>);
 
 impl UnzipEngineImpl for UnzipFileEngine {
     fn unzip(
@@ -124,7 +124,7 @@ impl UnzipEngineImpl for UnzipFileEngine {
 /// Engine which knows how to unzip a URI; specifically a URI fetched from
 /// an HTTP server which supports `Range` requests.
 #[derive(Clone)]
-struct UnzipUriEngine<F: Fn()>(
+pub struct UnzipUriEngine<F: Fn()>(
     Arc<SeekableHttpReaderEngine>,
     ZipArchive<SeekableHttpReader>,
     F,
@@ -157,21 +157,9 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
     }
 }
 
-impl UnzipEngine {
-    /// Create an unzip engine which knows how to unzip a file.
-    pub fn for_file(zipfile: File) -> Result<Self> {
-        // The following line doesn't actually seem to make any significant
-        // performance difference.
-        // let zipfile = BufReader::new(zipfile);
-        let compressed_length = zipfile.len();
-        let zipfile = CloneableSeekableReader::new(zipfile);
-        Ok(Self {
-            zipfile: Box::new(UnzipFileEngine(ZipArchive::new(zipfile)?)),
-            compressed_length,
-            directory_creator: DirectoryCreator::default(),
-        })
-    }
+pub struct UnzipEngineBuilder;
 
+impl UnzipEngineBuilder {
     /// Create an unzip engine which knows how to unzip a URI.
     /// Parameters:
     /// - the URI
@@ -181,49 +169,44 @@ impl UnzipEngine {
     /// - an additional callback to warn if performance was impaired by
     ///   rewinding the HTTP stream. (This implies the readahead buffer was
     ///   too small.)
-    pub fn for_uri<F: Fn() + 'static>(
+    pub fn try_build_for_uri<F: Fn() + 'static>(
         uri: &str,
         readahead_limit: Option<usize>,
         callback_on_rewind: F,
-    ) -> Result<Self> {
+    ) -> Result<UnzipEngine<UnzipUriEngine<F>>> {
         let seekable_http_reader = SeekableHttpReaderEngine::new(
             uri.to_string(),
             readahead_limit,
             AccessPattern::RandomAccess,
+        )?;
+        let compressed_length = seekable_http_reader.len();
+        let zipfile = UnzipUriEngine(
+            seekable_http_reader.clone(),
+            ZipArchive::new(seekable_http_reader.create_reader())?,
+            callback_on_rewind,
         );
-        let (compressed_length, zipfile): (u64, Box<dyn UnzipEngineImpl>) =
-            match seekable_http_reader {
-                Ok(seekable_http_reader) => (
-                    seekable_http_reader.len(),
-                    Box::new(UnzipUriEngine(
-                        seekable_http_reader.clone(),
-                        ZipArchive::new(seekable_http_reader.create_reader())?,
-                        callback_on_rewind,
-                    )),
-                ),
-                Err(_) => {
-                    // This server probably doesn't support HTTP ranges.
-                    // Let's fall back to fetching the request into a temporary
-                    // file then unzipping.
-                    log::warn!("HTTP(S) server does not support range requests - falling back to fetching whole file.");
-                    let mut response = reqwest::blocking::get(uri)?;
-                    let mut tempfile = tempfile::tempfile()?;
-                    std::io::copy(&mut response, &mut tempfile)?;
-                    let compressed_length = tempfile.len();
-                    let zipfile = CloneableSeekableReader::new(tempfile);
-                    (
-                        compressed_length,
-                        Box::new(UnzipFileEngine(ZipArchive::new(zipfile)?)),
-                    )
-                }
-            };
-        Ok(Self {
+        Ok(UnzipEngine {
             zipfile,
             compressed_length,
             directory_creator: DirectoryCreator::default(),
         })
     }
+    /// Create an unzip engine which knows how to unzip a file.
+    pub fn try_build_for_file(zipfile: File) -> Result<UnzipEngine<UnzipFileEngine>> {
+        // The following line doesn't actually seem to make any significant
+        // performance difference.
+        // let zipfile = BufReader::new(zipfile);
+        let compressed_length = zipfile.len();
+        let zipfile = CloneableSeekableReader::new(zipfile);
+        Ok(UnzipEngine {
+            zipfile: UnzipFileEngine(ZipArchive::new(zipfile)?),
+            compressed_length,
+            directory_creator: DirectoryCreator::default(),
+        })
+    }
+}
 
+impl<EngineImpl: UnzipEngineImpl> UnzipEngine<EngineImpl> {
     /// The total compressed length that we expect to retrieve over
     /// the network or from the compressed file.
     pub fn zip_length(&self) -> u64 {
@@ -457,7 +440,7 @@ fn extract_file_inner(
 /// An engine used to ensure we don't conflict in creating directories
 /// between threads
 #[derive(Default)]
-struct DirectoryCreator(Mutex<()>);
+pub struct DirectoryCreator(Mutex<()>);
 
 impl DirectoryCreator {
     fn create_dir_all(&self, path: &Path) -> Result<()> {
@@ -513,7 +496,8 @@ mod tests {
     fn create_zip(w: impl Write + Seek, include_a_txt: bool) {
         let mut zip = ZipWriter::new(w);
 
-        zip.add_directory::<_, ()>("test/", Default::default()).unwrap();
+        zip.add_directory::<_, ()>("test/", Default::default())
+            .unwrap();
         let options = FileOptions::<()>::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);
