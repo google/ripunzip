@@ -282,7 +282,7 @@ fn file_generator(file_size: FileSize) -> impl FnMut() -> String {
 fn create_zip(w: impl Write + Seek, zip_params: &ZipParams) {
     let mut zip = ZipWriter::new(w);
 
-    let options = FileOptions::default()
+    let options = FileOptions::<()>::default()
         .compression_method(zip_params.compression)
         .unix_permissions(0o755);
 
