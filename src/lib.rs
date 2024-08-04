@@ -12,7 +12,7 @@ pub mod unzip;
 
 pub use unzip::cloneable_seekable_reader::CloneableSeekableReader;
 pub use unzip::DirectoryCreator;
-pub use unzip::FilenameFilter;
+pub use unzip::UnzipFilenameFilter;
 pub use unzip::NullProgressReporter;
 pub use unzip::UnzipEngine;
 pub use unzip::UnzipEngineBuilder;

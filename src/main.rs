@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use ripunzip::unzip::cloneable_seekable_reader::HasLength;
 use ripunzip::{
-    CloneableSeekableReader, DirectoryCreator, FilenameFilter, NullProgressReporter, UnzipEngine,
+    CloneableSeekableReader, DirectoryCreator, UnzipFilenameFilter, NullProgressReporter, UnzipEngine,
     UnzipEngineBuilder, UnzipEngineImpl, UnzipFileEngine, UnzipOptions, UnzipProgressReporter,
     UnzipUriEngine,
 };
@@ -156,7 +156,7 @@ fn unzip<EngineImpl: UnzipEngineImpl>(
     unzip_args: UnzipArgs,
     is_silent: bool,
 ) -> Result<()> {
-    let filename_filter: Option<Box<dyn FilenameFilter + Sync>> =
+    let filename_filter: Option<Box<dyn UnzipFilenameFilter + Sync>> =
         if unzip_args.filenames_to_unzip.is_empty() {
             None
         } else {
@@ -211,7 +211,7 @@ fn list<EngineImpl: UnzipEngineImpl>(engine: UnzipEngine<EngineImpl>) -> Result<
 
 struct FileListFilter(RwLock<Vec<WildMatch>>);
 
-impl FilenameFilter for FileListFilter {
+impl UnzipFilenameFilter for FileListFilter {
     fn should_unzip(&self, filename: &str) -> bool {
         let lock = self.0.read().unwrap();
         lock.iter().any(|m| m.matches(filename))
@@ -252,7 +252,7 @@ impl UnzipProgressReporter for ProgressDisplayer {
 mod tests {
     use std::sync::RwLock;
 
-    use ripunzip::FilenameFilter;
+    use ripunzip::UnzipFilenameFilter;
     use wildmatch::WildMatch;
 
     use crate::FileListFilter;

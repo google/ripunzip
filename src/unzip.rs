@@ -39,7 +39,7 @@ pub struct UnzipOptions<'a, ProgressReporter: UnzipProgressReporter> {
     /// Whether to run in single-threaded mode.
     pub single_threaded: bool,
     /// A filename filter, optionally
-    pub filename_filter: Option<Box<dyn FilenameFilter + Sync + 'a>>,
+    pub filename_filter: Option<Box<dyn UnzipFilenameFilter + Sync + 'a>>,
     /// An object to receive notifications of unzip progress.
     pub progress_reporter: ProgressReporter,
 }
@@ -79,7 +79,7 @@ pub struct UnzipEngine<EngineImpl: UnzipEngineImpl> {
 }
 
 /// Code which can determine whether to unzip a given filename.
-pub trait FilenameFilter {
+pub trait UnzipFilenameFilter {
     /// Returns true if the given filename should be unzipped.
     fn should_unzip(&self, filename: &str) -> bool;
 }
@@ -472,7 +472,7 @@ mod tests {
     use ripunzip_test_utils::*;
 
     struct UnzipSomeFilter;
-    impl FilenameFilter for UnzipSomeFilter {
+    impl UnzipFilenameFilter for UnzipSomeFilter {
         fn should_unzip(&self, filename: &str) -> bool {
             let file_list = ["test/c.txt", "b.txt"];
             file_list.contains(&filename)
@@ -481,7 +481,7 @@ mod tests {
 
     fn run_with_and_without_a_filename_filter<F>(fun: F)
     where
-        F: Fn(bool, Option<Box<dyn FilenameFilter + Sync>>),
+        F: Fn(bool, Option<Box<dyn UnzipFilenameFilter + Sync>>),
     {
         fun(true, None);
         fun(false, Some(Box::new(UnzipSomeFilter)));
@@ -593,7 +593,7 @@ mod tests {
 
     use httptest::Server;
 
-    use super::FilenameFilter;
+    use super::UnzipFilenameFilter;
 
     #[test]
     fn test_extract_from_server() {
