@@ -168,15 +168,22 @@ fn unzip<EngineImpl: UnzipEngineImpl>(
                     .collect(),
             ))))
         };
-    let options = UnzipOptions {
-        output_directory: unzip_args.output_directory,
-        single_threaded: unzip_args.single_threaded,
-        filename_filter,
-    };
     if is_silent {
-        engine.unzip(options, NullProgressReporter)
+        let options = UnzipOptions {
+            output_directory: unzip_args.output_directory,
+            single_threaded: unzip_args.single_threaded,
+            filename_filter,
+            progress_reporter: NullProgressReporter,
+        };
+        engine.unzip(options)
     } else {
-        engine.unzip(options, ProgressDisplayer::new())
+        let options = UnzipOptions {
+            output_directory: unzip_args.output_directory,
+            single_threaded: unzip_args.single_threaded,
+            filename_filter,
+            progress_reporter: ProgressDisplayer::new(),
+        };
+        engine.unzip(options)
     }
 }
 
