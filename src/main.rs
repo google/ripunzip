@@ -13,9 +13,9 @@ use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use ripunzip::unzip::cloneable_seekable_reader::HasLength;
 use ripunzip::{
-    CloneableSeekableReader, DirectoryCreator, UnzipFilenameFilter, NullProgressReporter, UnzipEngine,
-    UnzipEngineBuilder, UnzipEngineImpl, UnzipFileEngine, UnzipOptions, UnzipProgressReporter,
-    UnzipUriEngine,
+    CloneableSeekableReader, DirectoryCreator, NullProgressReporter, UnzipEngine,
+    UnzipEngineBuilder, UnzipEngineImpl, UnzipFileEngine, UnzipFilenameFilter, UnzipOptions,
+    UnzipProgressReporter, UnzipUriEngine,
 };
 use std::{fmt::Write, fs::File, path::PathBuf, sync::RwLock};
 use wildmatch::WildMatch;
@@ -151,39 +151,62 @@ fn main() -> Result<()> {
     }
 }
 
-fn unzip<EngineImpl: UnzipEngineImpl>(
-    engine: UnzipEngine<EngineImpl>,
+fn unzip(
+    engine: UnzipEngine<impl UnzipEngineImpl>,
     unzip_args: UnzipArgs,
     is_silent: bool,
 ) -> Result<()> {
-    let filename_filter: Option<Box<dyn UnzipFilenameFilter + Sync>> =
-        if unzip_args.filenames_to_unzip.is_empty() {
-            None
+    #[inline]
+    fn unzip<FilenameFilter: UnzipFilenameFilter + Send>(
+        engine: UnzipEngine<impl UnzipEngineImpl>,
+        unzip_args: &UnzipArgs,
+        is_silent: bool,
+        filename_filter: Option<FilenameFilter>,
+    ) -> Result<()> {
+        #[inline]
+        fn unzip<
+            FilenameFilter: UnzipFilenameFilter + Send,
+            ProgressReporter: UnzipProgressReporter + Send,
+        >(
+            engine: UnzipEngine<impl UnzipEngineImpl>,
+            unzip_args: &UnzipArgs,
+            filename_filter: Option<FilenameFilter>,
+            progress_reporter: ProgressReporter,
+        ) -> Result<()> {
+            let options = UnzipOptions {
+                output_directory: unzip_args.output_directory.clone(),
+                single_threaded: unzip_args.single_threaded,
+                filename_filter,
+                progress_reporter,
+            };
+            engine.unzip(options)
+        }
+        if is_silent {
+            unzip(engine, unzip_args, filename_filter, NullProgressReporter)
         } else {
-            Some(Box::new(FileListFilter(RwLock::new(
+            unzip(
+                engine,
+                unzip_args,
+                filename_filter,
+                ProgressDisplayer::new(),
+            )
+        }
+    }
+    if unzip_args.filenames_to_unzip.is_empty() {
+        unzip::<FileListFilter>(engine, &unzip_args, is_silent, None)
+    } else {
+        unzip(
+            engine,
+            &unzip_args,
+            is_silent,
+            Some(FileListFilter(RwLock::new(
                 unzip_args
                     .filenames_to_unzip
                     .iter()
                     .map(|s| WildMatch::new(s))
                     .collect(),
-            ))))
-        };
-    if is_silent {
-        let options = UnzipOptions {
-            output_directory: unzip_args.output_directory,
-            single_threaded: unzip_args.single_threaded,
-            filename_filter,
-            progress_reporter: NullProgressReporter,
-        };
-        engine.unzip(options)
-    } else {
-        let options = UnzipOptions {
-            output_directory: unzip_args.output_directory,
-            single_threaded: unzip_args.single_threaded,
-            filename_filter,
-            progress_reporter: ProgressDisplayer::new(),
-        };
-        engine.unzip(options)
+            ))),
+        )
     }
 }
 

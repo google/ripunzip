@@ -12,12 +12,12 @@ pub mod unzip;
 
 pub use unzip::cloneable_seekable_reader::CloneableSeekableReader;
 pub use unzip::DirectoryCreator;
-pub use unzip::UnzipFilenameFilter;
 pub use unzip::NullProgressReporter;
 pub use unzip::UnzipEngine;
 pub use unzip::UnzipEngineBuilder;
 pub use unzip::UnzipEngineImpl;
 pub use unzip::UnzipFileEngine;
+pub use unzip::UnzipFilenameFilter;
 pub use unzip::UnzipOptions;
 pub use unzip::UnzipProgressReporter;
 pub use unzip::UnzipUriEngine;

@@ -33,13 +33,13 @@ use self::{
 };
 
 /// Options for unzipping.
-pub struct UnzipOptions<'a, ProgressReporter: UnzipProgressReporter> {
+pub struct UnzipOptions<ProgressReporter, FilenameFilter> {
     /// The destination directory.
     pub output_directory: Option<PathBuf>,
     /// Whether to run in single-threaded mode.
     pub single_threaded: bool,
     /// A filename filter, optionally
-    pub filename_filter: Option<Box<dyn UnzipFilenameFilter + Sync + 'a>>,
+    pub filename_filter: Option<FilenameFilter>,
     /// An object to receive notifications of unzip progress.
     pub progress_reporter: ProgressReporter,
 }
@@ -89,7 +89,7 @@ pub trait UnzipFilenameFilter {
 pub trait UnzipEngineImpl {
     fn unzip(
         &mut self,
-        options: UnzipOptions<impl UnzipProgressReporter + Send>,
+        options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error>;
 
@@ -104,7 +104,7 @@ pub struct UnzipFileEngine(pub ZipArchive<CloneableSeekableReader<File>>);
 impl UnzipEngineImpl for UnzipFileEngine {
     fn unzip(
         &mut self,
-        options: UnzipOptions<impl UnzipProgressReporter + Send>,
+        options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         unzip_serial_or_parallel(
@@ -133,7 +133,7 @@ pub struct UnzipUriEngine<F: Fn()>(
 impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
     fn unzip(
         &mut self,
-        options: UnzipOptions<impl UnzipProgressReporter + Send>,
+        options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         self.0
@@ -214,7 +214,10 @@ impl<EngineImpl: UnzipEngineImpl> UnzipEngine<EngineImpl> {
     }
 
     // Perform the unzip.
-    pub fn unzip(mut self, options: UnzipOptions<impl UnzipProgressReporter + Send>) -> Result<()> {
+    pub fn unzip(
+        mut self,
+        options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
+    ) -> Result<()> {
         log::debug!("Starting extract");
         options
             .progress_reporter
@@ -245,7 +248,7 @@ fn list<'a, T: Read + Seek + 'a>(zip_archive: &ZipArchive<T>) -> Result<Vec<Stri
 
 fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
     len: usize,
-    options: UnzipOptions<impl UnzipProgressReporter + Send>,
+    options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
     directory_creator: &DirectoryCreator,
     get_ziparchive_clone: impl Fn() -> ZipArchive<T> + Sync,
     // Call when a file is going to be skipped
@@ -300,7 +303,7 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
             }
             let mut filenames: Vec<_> = get_ziparchive_clone()
                 .file_names()
-                .filter(|name| filename_filter.as_ref().should_unzip(name))
+                .filter(|name| filename_filter.should_unzip(name))
                 .map(|s| s.to_string())
                 .collect();
             // The filenames returned by the file_names() method above are in
@@ -481,10 +484,10 @@ mod tests {
 
     fn run_with_and_without_a_filename_filter<F>(fun: F)
     where
-        F: Fn(bool, Option<Box<dyn UnzipFilenameFilter + Sync>>),
+        F: Fn(bool, Option<UnzipSomeFilter>),
     {
         fun(true, None);
-        fun(false, Some(Box::new(UnzipSomeFilter)));
+        fun(false, Some(UnzipSomeFilter));
     }
 
     fn create_zip_file(path: &Path, include_a_txt: bool) {
@@ -634,7 +637,7 @@ mod tests {
         let options = UnzipOptions {
             output_directory: Some(outdir),
             single_threaded: false,
-            filename_filter: None,
+            filename_filter: None::<UnzipSomeFilter>,
             progress_reporter: NullProgressReporter,
         };
         UnzipEngineBuilder::try_build_for_uri(&server.url("/foo").to_string(), None, || {})
