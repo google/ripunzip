@@ -10,7 +10,6 @@ pub mod cloneable_seekable_reader;
 mod http_range_reader;
 mod progress_updater;
 mod seekable_http_reader;
-use rustix::path::Arg;
 use std::{
     borrow::Cow,
     fs::File,
@@ -360,8 +359,7 @@ fn extract_file(
 ) -> Result<(), anyhow::Error> {
     let name = file
         .enclosed_name()
-        .as_ref()
-        .map(PathBuf::to_string_lossy)
+        .map(Path::to_string_lossy)
         .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
         .to_string();
     extract_file_inner(file, output_directory, progress_reporter, directory_creator)
@@ -380,7 +378,7 @@ fn extract_file_inner(
         .ok_or_else(|| std::io::Error::new(ErrorKind::Unsupported, "path not safe to extract"))?;
     let out_path = match output_directory {
         Some(output_directory) => output_directory.join(&name),
-        None => name.clone(),
+        None => PathBuf::from(name),
     };
     let display_name = name.display().to_string();
     progress_reporter.extraction_starting(&display_name);
@@ -498,9 +496,9 @@ mod tests {
     fn create_zip(w: impl Write + Seek, include_a_txt: bool) {
         let mut zip = ZipWriter::new(w);
 
-        zip.add_directory::<_, ()>("test/", Default::default())
+        zip.add_directory("test/", Default::default())
             .unwrap();
-        let options = FileOptions::<()>::default()
+        let options = FileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);
         if include_a_txt {

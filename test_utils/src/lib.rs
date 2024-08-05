@@ -57,7 +57,7 @@ impl httptest::responders::Responder for RangeAwareResponse {
         &mut self,
         req: &'a httptest::http::Request<httptest::bytes::Bytes>,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = httptest::http::Response<hyper::body::Bytes>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = httptest::http::Response<hyper::Body>> + Send + 'a>,
     > {
         let mut builder = http::Response::builder();
         builder = builder
@@ -282,7 +282,7 @@ fn file_generator(file_size: FileSize) -> impl FnMut() -> String {
 fn create_zip(w: impl Write + Seek, zip_params: &ZipParams) {
     let mut zip = ZipWriter::new(w);
 
-    let options = FileOptions::<()>::default()
+    let options = FileOptions::default()
         .compression_method(zip_params.compression)
         .unix_permissions(0o755);
 
