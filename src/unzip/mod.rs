@@ -496,8 +496,7 @@ mod tests {
     fn create_zip(w: impl Write + Seek, include_a_txt: bool) {
         let mut zip = ZipWriter::new(w);
 
-        zip.add_directory("test/", Default::default())
-            .unwrap();
+        zip.add_directory("test/", Default::default()).unwrap();
         let options = FileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);

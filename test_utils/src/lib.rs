@@ -128,7 +128,7 @@ pub enum ServerType {
 
 impl ServerType {
     /// Get an iterator for all the different server types.
-    pub fn types() -> impl Iterator<Item=ServerType> {
+    pub fn types() -> impl Iterator<Item = ServerType> {
         Self::iter()
     }
 }
@@ -286,7 +286,7 @@ fn create_zip(w: impl Write + Seek, zip_params: &ZipParams) {
         .compression_method(zip_params.compression)
         .unix_permissions(0o755);
 
-    let mut file_generator: Box<dyn Iterator<Item=_>> = match zip_params.file_sizes {
+    let mut file_generator: Box<dyn Iterator<Item = _>> = match zip_params.file_sizes {
         FileSizes::Fixed(size) => Box::new(std::iter::repeat(size).map(file_generator)),
         FileSizes::Variable => Box::new(
             std::iter::repeat(
@@ -294,7 +294,7 @@ fn create_zip(w: impl Write + Seek, zip_params: &ZipParams) {
                     .into_iter()
                     .map(file_generator),
             )
-                .flatten(),
+            .flatten(),
         ),
     };
 
