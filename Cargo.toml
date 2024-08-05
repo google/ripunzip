@@ -41,11 +41,11 @@ wildmatch = "2.3.4"
 zip = "2.1.6"
 
 [dev-dependencies]
-hexdump = "0.1.1"
+hexdump = "0.1.2"
 httptest = "0.16.1"
 http = "1.1.0"
 hyper = "1.4.1"
-test-log = "0.2.11"
+test-log = "0.2.16"
 criterion = "0.5.1"
 ripunzip_test_utils = { path = "test_utils" }
 
