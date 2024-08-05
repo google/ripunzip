@@ -157,7 +157,7 @@ fn unzip(
     is_silent: bool,
 ) -> Result<()> {
     #[inline]
-    fn unzip<FilenameFilter: UnzipFilenameFilter + Send>(
+    fn unzip<FilenameFilter: UnzipFilenameFilter + Sync>(
         engine: UnzipEngine<impl UnzipEngineImpl>,
         unzip_args: &UnzipArgs,
         is_silent: bool,
@@ -165,8 +165,8 @@ fn unzip(
     ) -> Result<()> {
         #[inline]
         fn unzip<
-            FilenameFilter: UnzipFilenameFilter + Send,
-            ProgressReporter: UnzipProgressReporter + Send,
+            FilenameFilter: UnzipFilenameFilter + Sync,
+            ProgressReporter: UnzipProgressReporter,
         >(
             engine: UnzipEngine<impl UnzipEngineImpl>,
             unzip_args: &UnzipArgs,
@@ -193,7 +193,7 @@ fn unzip(
         }
     }
     if unzip_args.filenames_to_unzip.is_empty() {
-        unzip::<FileListFilter>(engine, &unzip_args, is_silent, None)
+        unzip(engine, &unzip_args, is_silent, None::<FileListFilter>)
     } else {
         unzip(
             engine,

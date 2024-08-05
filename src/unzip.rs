@@ -89,7 +89,7 @@ pub trait UnzipFilenameFilter {
 pub trait UnzipEngineImpl {
     fn unzip(
         &mut self,
-        options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
+        options: UnzipOptions<impl UnzipProgressReporter, impl UnzipFilenameFilter + Sync>,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error>;
 
@@ -104,7 +104,7 @@ pub struct UnzipFileEngine(pub ZipArchive<CloneableSeekableReader<File>>);
 impl UnzipEngineImpl for UnzipFileEngine {
     fn unzip(
         &mut self,
-        options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
+        options: UnzipOptions<impl UnzipProgressReporter, impl UnzipFilenameFilter + Sync>,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         unzip_serial_or_parallel(
@@ -133,7 +133,7 @@ pub struct UnzipUriEngine<F: Fn()>(
 impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
     fn unzip(
         &mut self,
-        options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
+        options: UnzipOptions<impl UnzipProgressReporter, impl UnzipFilenameFilter + Sync>,
         directory_creator: &DirectoryCreator,
     ) -> Vec<anyhow::Error> {
         self.0
@@ -216,7 +216,7 @@ impl<EngineImpl: UnzipEngineImpl> UnzipEngine<EngineImpl> {
     // Perform the unzip.
     pub fn unzip(
         mut self,
-        options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
+        options: UnzipOptions<impl UnzipProgressReporter, impl UnzipFilenameFilter + Sync>,
     ) -> Result<()> {
         log::debug!("Starting extract");
         options
@@ -248,7 +248,7 @@ fn list<'a, T: Read + Seek + 'a>(zip_archive: &ZipArchive<T>) -> Result<Vec<Stri
 
 fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
     len: usize,
-    options: UnzipOptions<impl UnzipProgressReporter + Send, impl UnzipFilenameFilter + Send>,
+    options: UnzipOptions<impl UnzipProgressReporter, impl UnzipFilenameFilter + Sync>,
     directory_creator: &DirectoryCreator,
     get_ziparchive_clone: impl Fn() -> ZipArchive<T> + Sync,
     // Call when a file is going to be skipped
