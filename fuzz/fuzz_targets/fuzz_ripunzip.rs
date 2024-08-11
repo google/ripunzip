@@ -84,6 +84,8 @@ fuzz_target!(|input: Inputs| {
     let options = ripunzip::UnzipOptions {
         single_threaded: input.single_threaded,
         output_directory: Some(output_directory.clone()),
+        filename_filter: None,
+        progress_reporter: Box::new(progress_reporter),
     };
     let zipfile = tempdir.path().join("file.zip");
     let mut zip_data = Vec::new();
@@ -94,8 +96,8 @@ fuzz_target!(|input: Inputs| {
     let ripunzip_result: Result<(), anyhow::Error> = (|| match input.method {
         Method::File => {
             let file = std::fs::File::open(&zipfile).unwrap();
-            let ripunzip = ripunzip::UnzipEngine::for_file(file, options, progress_reporter)?;
-            ripunzip.unzip()
+            let ripunzip = ripunzip::UnzipEngine::for_file(file)?;
+            ripunzip.unzip(options)
         }
         Method::Uri {
             readahead_limit,
@@ -106,12 +108,10 @@ fuzz_target!(|input: Inputs| {
             let uri = &server.url("/foo").to_string();
             let ripunzip = ripunzip::UnzipEngine::for_uri(
                 uri,
-                options,
                 readahead_limit,
-                progress_reporter,
                 || {},
             )?;
-            ripunzip.unzip()
+            ripunzip.unzip(options)
         }
     })();
     let unziprs_result = unzip_with_zip_rs(&zipfile, &output_directory_unzip);

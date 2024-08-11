@@ -882,12 +882,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "monitor"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06508b4391c92efc13a8600bccbe29e04ceeefe65f021182f573e52e0f868931"
-
-[[package]]
 name = "native-tls"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1240,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "ripunzip"
-version = "1.2.0"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1249,7 +1243,6 @@ dependencies = [
  "indicatif",
  "itertools",
  "log",
- "monitor",
  "progress-streams",
  "ranges",
  "rayon",
