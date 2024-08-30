@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "ripunzip"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "clap 4.5.16",
