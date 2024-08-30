@@ -29,7 +29,6 @@ jobs:
           - rust: nightly
           - rust: beta
           - rust: stable
-          - rust: 1.70.0
           - name: macOS
             rust: nightly
             os: macos
