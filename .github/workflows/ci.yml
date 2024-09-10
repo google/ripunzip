@@ -69,7 +69,7 @@ jobs:
       - name: BuildDeb
         run: cargo deb
       - name: Upload Deb Artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: amd64deb
           path: ./target/debian/*.deb
