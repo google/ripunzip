@@ -18,10 +18,7 @@ use ranges::Ranges;
 use reqwest::blocking::Response;
 use thiserror::Error;
 
-use super::{
-    cloneable_seekable_reader::HasLength,
-    http_range_reader::{self, RangeFetcher},
-};
+use super::http_range_reader::{self, RangeFetcher};
 
 /// This is how much we read from the underlying HTTP stream in a given thread,
 /// before signalling other threads that they may wish to continue with their
@@ -633,12 +630,6 @@ impl Read for SeekableHttpReader {
         let bytes_read = self.engine.read(buf, self.pos)?;
         self.pos += bytes_read as u64;
         Ok(bytes_read)
-    }
-}
-
-impl HasLength for SeekableHttpReader {
-    fn len(&self) -> u64 {
-        self.engine.len()
     }
 }
 

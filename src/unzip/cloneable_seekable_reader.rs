@@ -7,20 +7,13 @@
 // except according to those terms.
 
 use std::{
-    fs::File,
-    io::{BufReader, Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom},
     sync::{Arc, Mutex},
 };
 
-/// A trait to represent some reader which has a total length known in
-/// advance. This is roughly equivalent to the nightly
-/// [`Seek::stream_len`] API.
-pub(crate) trait HasLength {
-    /// Return the current total length of this stream.
-    fn len(&self) -> u64;
-}
+use super::determine_stream_len;
 
-struct Inner<R: Read + Seek + HasLength> {
+struct Inner<R: Read + Seek> {
     /// The underlying Read implementation.
     r: R,
     /// The position of r.
@@ -29,7 +22,7 @@ struct Inner<R: Read + Seek + HasLength> {
     len: Option<u64>,
 }
 
-impl<R: Read + Seek + HasLength> Inner<R> {
+impl<R: Read + Seek> Inner<R> {
     fn new(r: R) -> Self {
         Self {
             r,
@@ -39,14 +32,15 @@ impl<R: Read + Seek + HasLength> Inner<R> {
     }
 
     /// Get the length of the data stream. This is assumed to be constant.
-    fn len(&mut self) -> u64 {
+    fn len(&mut self) -> std::io::Result<u64> {
+        // Return cached size
         if let Some(len) = self.len {
-            return len;
+            return Ok(len);
         }
 
-        let len = self.r.len();
+        let len = determine_stream_len(&mut self.r)?;
         self.len = Some(len);
-        len
+        Ok(len)
     }
 
     /// Read into the given buffer, starting at the given offset in the data stream.
@@ -67,14 +61,14 @@ impl<R: Read + Seek + HasLength> Inner<R> {
 /// and thus can be cloned cheaply. It supports seeking; each cloned instance
 /// maintains its own pointer into the file, and the underlying instance
 /// is seeked prior to each read.
-pub(crate) struct CloneableSeekableReader<R: Read + Seek + HasLength> {
+pub(crate) struct CloneableSeekableReader<R: Read + Seek> {
     /// The wrapper around the Read implementation, shared between threads.
     inner: Arc<Mutex<Inner<R>>>,
     /// The position of _this_ reader.
     pos: u64,
 }
 
-impl<R: Read + Seek + HasLength> Clone for CloneableSeekableReader<R> {
+impl<R: Read + Seek> Clone for CloneableSeekableReader<R> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -83,7 +77,7 @@ impl<R: Read + Seek + HasLength> Clone for CloneableSeekableReader<R> {
     }
 }
 
-impl<R: Read + Seek + HasLength> CloneableSeekableReader<R> {
+impl<R: Read + Seek> CloneableSeekableReader<R> {
     /// Constructor. Takes ownership of the underlying `Read`.
     /// You should pass in only streams whose total length you expect
     /// to be fixed and unchanging. Odd behavior may occur if the length
@@ -97,7 +91,7 @@ impl<R: Read + Seek + HasLength> CloneableSeekableReader<R> {
     }
 }
 
-impl<R: Read + Seek + HasLength> Read for CloneableSeekableReader<R> {
+impl<R: Read + Seek> Read for CloneableSeekableReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut inner = self.inner.lock().unwrap();
         let read_result = inner.read_at(self.pos, buf);
@@ -114,12 +108,12 @@ impl<R: Read + Seek + HasLength> Read for CloneableSeekableReader<R> {
     }
 }
 
-impl<R: Read + Seek + HasLength> Seek for CloneableSeekableReader<R> {
+impl<R: Read + Seek> Seek for CloneableSeekableReader<R> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos = match pos {
             SeekFrom::Start(pos) => pos,
             SeekFrom::End(offset_from_end) => {
-                let file_len = self.inner.lock().unwrap().len();
+                let file_len = self.inner.lock().unwrap().len()?;
                 if -offset_from_end as u64 > file_len {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -146,29 +140,11 @@ impl<R: Read + Seek + HasLength> Seek for CloneableSeekableReader<R> {
     }
 }
 
-impl<R: HasLength> HasLength for BufReader<R> {
-    fn len(&self) -> u64 {
-        self.get_ref().len()
-    }
-}
-
-impl HasLength for File {
-    fn len(&self) -> u64 {
-        self.metadata().unwrap().len()
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use super::{CloneableSeekableReader, HasLength};
+    use super::CloneableSeekableReader;
     use std::io::{Cursor, Read, Seek, SeekFrom};
     use test_log::test;
-
-    impl HasLength for Cursor<Vec<u8>> {
-        fn len(&self) -> u64 {
-            self.get_ref().len() as u64
-        }
-    }
 
     #[test]
     fn test_cloneable_seekable_reader() -> std::io::Result<()> {
