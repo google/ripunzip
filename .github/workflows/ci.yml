@@ -29,7 +29,6 @@ jobs:
           - rust: nightly
           - rust: beta
           - rust: stable
-          - rust: 1.70.0
           - name: macOS
             rust: nightly
             os: macos
@@ -60,7 +59,7 @@ jobs:
 
   deb:
     name: BuildDeb
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -70,7 +69,7 @@ jobs:
       - name: BuildDeb
         run: cargo deb
       - name: Upload Deb Artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: amd64deb
           path: ./target/debian/*.deb
