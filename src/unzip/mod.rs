@@ -533,6 +533,11 @@ mod tests {
         create_zip(file, include_a_txt)
     }
 
+    fn create_encryped_zip_file(path: &Path, include_a_txt: bool) {
+        let file = File::create(path).unwrap();
+        create_encrypted_zip(file, include_a_txt)
+    }
+
     fn create_zip(w: impl Write + Seek, include_a_txt: bool) {
         let mut zip = ZipWriter::new(w);
 
@@ -540,6 +545,25 @@ mod tests {
         let options = FileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);
+        if include_a_txt {
+            zip.start_file("test/a.txt", options).unwrap();
+            zip.write_all(b"Contents of A\n").unwrap();
+        }
+        zip.start_file("b.txt", options).unwrap();
+        zip.write_all(b"Contents of B\n").unwrap();
+        zip.start_file("test/c.txt", options).unwrap();
+        zip.write_all(b"Contents of C\n").unwrap();
+        zip.finish().unwrap();
+    }
+
+    fn create_encrypted_zip(w: impl Write + Seek, include_a_txt: bool,) {
+        let mut zip = ZipWriter::new(w);
+
+        zip.add_directory("test/", Default::default()).unwrap();
+        let options = FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o755)
+            .with_deprecated_encryption("1Password".as_ref());
         if include_a_txt {
             zip.start_file("test/a.txt", options).unwrap();
             zip.write_all(b"Contents of A\n").unwrap();
@@ -608,6 +632,26 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_encrypted_with_path() {
+        run_with_and_without_a_filename_filter(|create_a, filename_filter| {
+            let td = tempdir().unwrap();
+            let zf = td.path().join("z.zip");
+            create_encryped_zip_file(&zf, create_a);
+            let zf = File::open(zf).unwrap();
+            let outdir = td.path().join("outdir");
+            let options = UnzipOptions {
+                output_directory: Some(outdir.clone()),
+                password: Some("1Password".to_string()),
+                single_threaded: false,
+                filename_filter,
+                progress_reporter: Box::new(NullProgressReporter),
+            };
+            UnzipEngine::for_file(zf).unwrap().unzip(options).unwrap();
+            check_files_exist(&outdir, create_a);
+        });
+    }
+
+    #[test]
     fn test_extract_with_path_with_password() {
         run_with_and_without_a_filename_filter(|create_a, filename_filter| {
             let td = tempdir().unwrap();
@@ -644,7 +688,7 @@ mod tests {
     }
 
     use httptest::Server;
-
+    use zip::unstable::write::FileOptionsExt;
     use super::FilenameFilter;
 
     #[test]
