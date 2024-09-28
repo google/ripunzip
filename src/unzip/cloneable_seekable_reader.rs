@@ -102,8 +102,13 @@ impl<R: Read + Seek + HasLength> Read for CloneableSeekableReader<R> {
         let mut inner = self.inner.lock().unwrap();
         let read_result = inner.read_at(self.pos, buf);
         if let Ok(bytes_read) = read_result {
-            // TODO, once stabilised, use checked_add_signed
-            self.pos += bytes_read as u64;
+            self.pos = self
+                .pos
+                .checked_add(bytes_read as u64)
+                .ok_or(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Read too far forward",
+                ))?;
         }
         read_result
     }
@@ -121,17 +126,20 @@ impl<R: Read + Seek + HasLength> Seek for CloneableSeekableReader<R> {
                         "Seek too far backwards",
                     ));
                 }
-                // TODO, once stabilised, use checked_add_signed
-                file_len - (-offset_from_end as u64)
+                file_len
+                    .checked_add_signed(offset_from_end)
+                    .ok_or(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Seek too far backward from end",
+                    ))?
             }
-            // TODO, once stabilised, use checked_add_signed
-            SeekFrom::Current(offset_from_pos) => {
-                if offset_from_pos > 0 {
-                    self.pos + (offset_from_pos as u64)
-                } else {
-                    self.pos - ((-offset_from_pos) as u64)
-                }
-            }
+            SeekFrom::Current(offset_from_pos) => self
+                .pos
+                .checked_add_signed(offset_from_pos)
+                .ok_or(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Seek too far forward from current pos",
+                ))?,
         };
         self.pos = new_pos;
         Ok(new_pos)
