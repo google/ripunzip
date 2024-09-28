@@ -74,7 +74,7 @@ struct UnzipArgs {
     output_directory: Option<PathBuf>,
 
     /// Password to decrypt encrypted zipfile entries (if any).
-    /// Encryption is assumed to be the ZipCrypto algorithm.
+    /// Both ZipCrypto and AES encrypted zipfiles are supported.
     #[arg(short = 'P', long, value_name = "PASSWORD")]
     password: Option<String>,
 
