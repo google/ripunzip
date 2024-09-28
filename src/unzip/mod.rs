@@ -519,40 +519,28 @@ mod tests {
 
     fn create_zip_file(path: &Path, include_a_txt: bool) {
         let file = File::create(path).unwrap();
-        create_zip(file, include_a_txt)
+        create_zip(file, include_a_txt, None)
     }
 
-    fn create_encryped_zip_file(path: &Path, include_a_txt: bool) {
+    fn create_encrypted_zip_file(path: &Path, include_a_txt: bool) {
         let file = File::create(path).unwrap();
-        create_encrypted_zip(file, include_a_txt)
-    }
-
-    fn create_zip(w: impl Write + Seek, include_a_txt: bool) {
-        let mut zip = ZipWriter::new(w);
-
-        zip.add_directory("test/", Default::default()).unwrap();
-        let options = FileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored)
-            .unix_permissions(0o755);
-        if include_a_txt {
-            zip.start_file("test/a.txt", options).unwrap();
-            zip.write_all(b"Contents of A\n").unwrap();
-        }
-        zip.start_file("b.txt", options).unwrap();
-        zip.write_all(b"Contents of B\n").unwrap();
-        zip.start_file("test/c.txt", options).unwrap();
-        zip.write_all(b"Contents of C\n").unwrap();
-        zip.finish().unwrap();
-    }
-
-    fn create_encrypted_zip(w: impl Write + Seek, include_a_txt: bool) {
-        let mut zip = ZipWriter::new(w);
-
-        zip.add_directory("test/", Default::default()).unwrap();
         let options = FileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755)
             .with_deprecated_encryption("1Password".as_ref());
+        create_zip(file, include_a_txt, Some(options))
+    }
+
+    fn create_zip(w: impl Write + Seek, include_a_txt: bool, custom_options: Option<FileOptions>) {
+        let mut zip = ZipWriter::new(w);
+        let options = custom_options.unwrap_or_else(|| {
+            FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .unix_permissions(0o755)
+        });
+
+        zip.add_directory("test/", Default::default()).unwrap();
+
         if include_a_txt {
             zip.start_file("test/a.txt", options).unwrap();
             zip.write_all(b"Contents of A\n").unwrap();
@@ -625,7 +613,7 @@ mod tests {
         run_with_and_without_a_filename_filter(|create_a, filename_filter| {
             let td = tempdir().unwrap();
             let zf = td.path().join("z.zip");
-            create_encryped_zip_file(&zf, create_a);
+            create_encrypted_zip_file(&zf, create_a);
             let zf = File::open(zf).unwrap();
             let outdir = td.path().join("outdir");
             let options = UnzipOptions {
@@ -661,7 +649,7 @@ mod tests {
         run_with_and_without_a_filename_filter(|create_a, filename_filter| {
             let td = tempdir().unwrap();
             let mut zip_data = Cursor::new(Vec::new());
-            create_zip(&mut zip_data, create_a);
+            create_zip(&mut zip_data, create_a, None);
             let body = zip_data.into_inner();
             println!("Whole zip:");
             hexdump::hexdump(&body);
