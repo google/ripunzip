@@ -344,12 +344,8 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                 .map(|name| {
                     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
                     let file: ZipFile = match &options.password {
-                        None => {
-                            myzip.by_name(&name)?
-                        }
-                        Some(string) => {
-                            myzip.by_name_decrypt(&name, string.as_bytes())??
-                        }
+                        None => myzip.by_name(&name)?,
+                        Some(string) => myzip.by_name_decrypt(&name, string.as_bytes())??,
                     };
                     let r = extract_file(
                         file,
@@ -380,7 +376,6 @@ fn extract_file_by_index<'a, T: Read + Seek + 'a>(
         None => {
             file = myzip.by_index(i)?;
             extract_file(file, output_directory, progress_reporter, directory_creator)
-
         }
         Some(string) => {
             file = myzip.by_index_decrypt(i, string.as_bytes())??;
@@ -496,6 +491,10 @@ impl DirectoryCreator {
 
 #[cfg(test)]
 mod tests {
+    use super::FilenameFilter;
+    use crate::{NullProgressReporter, UnzipEngine, UnzipOptions};
+    use httptest::Server;
+    use ripunzip_test_utils::*;
     use std::{
         collections::HashSet,
         env::{current_dir, set_current_dir},
@@ -505,10 +504,8 @@ mod tests {
     };
     use tempfile::tempdir;
     use test_log::test;
+    use zip::unstable::write::FileOptionsExt;
     use zip::{write::FileOptions, ZipWriter};
-
-    use crate::{NullProgressReporter, UnzipEngine, UnzipOptions};
-    use ripunzip_test_utils::*;
 
     struct UnzipSomeFilter;
     impl FilenameFilter for UnzipSomeFilter {
@@ -554,7 +551,7 @@ mod tests {
         zip.finish().unwrap();
     }
 
-    fn create_encrypted_zip(w: impl Write + Seek, include_a_txt: bool,) {
+    fn create_encrypted_zip(w: impl Write + Seek, include_a_txt: bool) {
         let mut zip = ZipWriter::new(w);
 
         zip.add_directory("test/", Default::default()).unwrap();
@@ -664,10 +661,6 @@ mod tests {
                 .collect()
         )
     }
-
-    use httptest::Server;
-    use zip::unstable::write::FileOptionsExt;
-    use super::FilenameFilter;
 
     #[test]
     fn test_extract_from_server() {
