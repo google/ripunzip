@@ -343,15 +343,14 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                 .into_iter()
                 .map(|name| {
                     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
-                    let file: ZipFile;
-                    match &options.password {
+                    let file: ZipFile = match &options.password {
                         None => {
-                            file = myzip.by_name(&name)?;
+                            myzip.by_name(&name)?
                         }
                         Some(string) => {
-                            file = myzip.by_name_decrypt(&name, string.as_bytes())??;
+                            myzip.by_name_decrypt(&name, string.as_bytes())??
                         }
-                    }
+                    };
                     let r = extract_file(
                         file,
                         &options.output_directory,
