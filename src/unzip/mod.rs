@@ -14,7 +14,7 @@ mod seekable_http_reader;
 use std::{
     borrow::Cow,
     fs::File,
-    io::{ErrorKind, Read, Seek},
+    io::{ErrorKind, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -27,10 +27,16 @@ use crate::unzip::{
     cloneable_seekable_reader::CloneableSeekableReader, progress_updater::ProgressUpdater,
 };
 
-use self::{
-    cloneable_seekable_reader::HasLength,
-    seekable_http_reader::{AccessPattern, SeekableHttpReader, SeekableHttpReaderEngine},
-};
+use self::seekable_http_reader::{AccessPattern, SeekableHttpReader, SeekableHttpReaderEngine};
+
+pub(crate) fn determine_stream_len<R: Seek>(stream: &mut R) -> std::io::Result<u64> {
+    let old_pos = stream.stream_position()?;
+    let len = stream.seek(SeekFrom::End(0))?;
+    if old_pos != len {
+        stream.seek(SeekFrom::Start(old_pos))?;
+    }
+    Ok(len)
+}
 
 /// Options for unzipping.
 pub struct UnzipOptions<'a, 'b> {
@@ -159,11 +165,11 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
 
 impl UnzipEngine {
     /// Create an unzip engine which knows how to unzip a file.
-    pub fn for_file(zipfile: File) -> Result<Self> {
+    pub fn for_file(mut zipfile: File) -> Result<Self> {
         // The following line doesn't actually seem to make any significant
         // performance difference.
         // let zipfile = BufReader::new(zipfile);
-        let compressed_length = zipfile.len();
+        let compressed_length = determine_stream_len(&mut zipfile)?;
         let zipfile = CloneableSeekableReader::new(zipfile);
         Ok(Self {
             zipfile: Box::new(UnzipFileEngine(ZipArchive::new(zipfile)?)),
@@ -209,7 +215,7 @@ impl UnzipEngine {
                     let mut response = reqwest::blocking::get(uri)?;
                     let mut tempfile = tempfile::tempfile()?;
                     std::io::copy(&mut response, &mut tempfile)?;
-                    let compressed_length = tempfile.len();
+                    let compressed_length = determine_stream_len(&mut tempfile)?;
                     let zipfile = CloneableSeekableReader::new(tempfile);
                     (
                         compressed_length,
