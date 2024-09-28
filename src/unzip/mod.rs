@@ -371,17 +371,11 @@ fn extract_file_by_index<'a, T: Read + Seek + 'a>(
     directory_creator: &DirectoryCreator,
 ) -> Result<(), anyhow::Error> {
     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
-    let file: ZipFile;
-    match password {
-        None => {
-            file = myzip.by_index(i)?;
-            extract_file(file, output_directory, progress_reporter, directory_creator)
-        }
-        Some(string) => {
-            file = myzip.by_index_decrypt(i, string.as_bytes())??;
-            extract_file(file, output_directory, progress_reporter, directory_creator)
-        }
-    }
+    let file: ZipFile = match password {
+        None => myzip.by_index(i)?,
+        Some(string) => myzip.by_index_decrypt(i, string.as_bytes())??,
+    };
+    extract_file(file, output_directory, progress_reporter, directory_creator)
 }
 
 fn extract_file(
