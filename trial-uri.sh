@@ -20,7 +20,7 @@ rm -Rf /tmp/testb
 mkdir /tmp/testb
 pushd /tmp/testb
 echo ripunzip:
-time sh -c "$MYDIR/target/release/ripunzip uri \"$URI\" "
+time sh -c "$MYDIR/target/release/ripunzip unzip-uri \"$URI\" "
 popd
 rm -Rf /tmp/testb
 

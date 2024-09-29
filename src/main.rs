@@ -19,7 +19,7 @@ use ripunzip::{
 use wildmatch::WildMatch;
 
 const LONG_ABOUT: &str =
-    "ripunzip is a tool to unzip zip files in parallel, possibly from a remote server. 
+    "ripunzip is a tool to unzip zip files in parallel, possibly from a remote server.
 It works best with HTTP(S) servers that support Range requests.";
 
 /// Unzip all files within a zip file as quickly as possible.
@@ -72,6 +72,11 @@ struct UnzipArgs {
     /// current working directory is used.
     #[arg(short = 'd', long, value_name = "DIRECTORY")]
     output_directory: Option<PathBuf>,
+
+    /// Password to decrypt encrypted zipfile entries (if any).
+    /// Both ZipCrypto and AES encrypted zipfiles are supported.
+    #[arg(short = 'P', long, value_name = "PASSWORD")]
+    password: Option<String>,
 
     /// Whether to decompress on a single thread. By default,
     /// multiple threads are used, but this can lead to more network traffic.
@@ -152,6 +157,7 @@ fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs, is_silent: bool) -> Result<
     };
     let options = UnzipOptions {
         output_directory: unzip_args.output_directory,
+        password: unzip_args.password,
         single_threaded: unzip_args.single_threaded,
         filename_filter,
         progress_reporter,
