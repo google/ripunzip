@@ -50,8 +50,13 @@ impl<R: Read + Seek> Inner<R> {
         }
         let read_result = self.r.read(buf);
         if let Ok(bytes_read) = read_result {
-            // TODO, once stabilised, use checked_add_signed
-            self.pos += bytes_read as u64;
+            self.pos = self
+                .pos
+                .checked_add(bytes_read as u64)
+                .ok_or(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Read too far forward",
+                ))?;
         }
         read_result
     }
