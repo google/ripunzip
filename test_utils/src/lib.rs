@@ -24,7 +24,10 @@ use httptest::{responders::*, Expectation, Server};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use strum::IntoEnumIterator;
-use zip::{write::FileOptions, ZipWriter};
+use zip::{
+    write::{ExtendedFileOptions, FileOptions},
+    ZipWriter,
+};
 
 /// How to respond to a range-aware request.
 pub enum RangeAwareResponseType {
@@ -282,7 +285,7 @@ fn file_generator(file_size: FileSize) -> impl FnMut() -> String {
 fn create_zip(w: impl Write + Seek, zip_params: &ZipParams) {
     let mut zip = ZipWriter::new(w);
 
-    let options = FileOptions::default()
+    let options = FileOptions::<ExtendedFileOptions>::default()
         .compression_method(zip_params.compression)
         .unix_permissions(0o755);
 
@@ -299,6 +302,7 @@ fn create_zip(w: impl Write + Seek, zip_params: &ZipParams) {
     };
 
     for i in 0..zip_params.num_files {
+        let options = options.clone();
         zip.start_file(format!("{i}.txt"), options).unwrap();
         zip.write_all(file_generator.next().unwrap()().as_bytes())
             .unwrap();
