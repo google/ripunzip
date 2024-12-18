@@ -351,7 +351,7 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
                     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
                     let file: ZipFile = match &options.password {
                         None => myzip.by_name(&name)?,
-                        Some(string) => myzip.by_name_decrypt(&name, string.as_bytes())??,
+                        Some(string) => myzip.by_name_decrypt(&name, string.as_bytes())?,
                     };
                     let r = extract_file(
                         file,
@@ -379,7 +379,7 @@ fn extract_file_by_index<'a, T: Read + Seek + 'a>(
     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
     let file: ZipFile = match password {
         None => myzip.by_index(i)?,
-        Some(string) => myzip.by_index_decrypt(i, string.as_bytes())??,
+        Some(string) => myzip.by_index_decrypt(i, string.as_bytes())?,
     };
     extract_file(file, output_directory, progress_reporter, directory_creator)
 }
@@ -392,6 +392,7 @@ fn extract_file(
 ) -> Result<(), anyhow::Error> {
     let name = file
         .enclosed_name()
+        .as_deref()
         .map(Path::to_string_lossy)
         .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
         .to_string();
@@ -409,11 +410,11 @@ fn extract_file_inner(
     let name = file
         .enclosed_name()
         .ok_or_else(|| std::io::Error::new(ErrorKind::Unsupported, "path not safe to extract"))?;
+    let display_name = name.display().to_string();
     let out_path = match output_directory {
         Some(output_directory) => output_directory.join(name),
-        None => PathBuf::from(name),
+        None => name,
     };
-    let display_name = name.display().to_string();
     progress_reporter.extraction_starting(&display_name);
     log::debug!(
         "Start extract of file at {:x}, length {:x}, name {}",
@@ -504,7 +505,7 @@ mod tests {
     };
     use tempfile::tempdir;
     use test_log::test;
-    use zip::unstable::write::FileOptionsExt;
+    use zip::{unstable::write::FileOptionsExt, write::ExtendedFileOptions};
     use zip::{write::FileOptions, ZipWriter};
 
     struct UnzipSomeFilter;
@@ -537,7 +538,11 @@ mod tests {
         create_zip(file, include_a_txt, Some(options))
     }
 
-    fn create_zip(w: impl Write + Seek, include_a_txt: bool, custom_options: Option<FileOptions>) {
+    fn create_zip(
+        w: impl Write + Seek,
+        include_a_txt: bool,
+        custom_options: Option<FileOptions<ExtendedFileOptions>>,
+    ) {
         let mut zip = ZipWriter::new(w);
         let options = custom_options.unwrap_or_else(|| {
             FileOptions::default()
@@ -545,13 +550,14 @@ mod tests {
                 .unix_permissions(0o755)
         });
 
-        zip.add_directory("test/", Default::default()).unwrap();
+        zip.add_directory::<_, ExtendedFileOptions>("test/", Default::default())
+            .unwrap();
 
         if include_a_txt {
-            zip.start_file("test/a.txt", options).unwrap();
+            zip.start_file("test/a.txt", options.clone()).unwrap();
             zip.write_all(b"Contents of A\n").unwrap();
         }
-        zip.start_file("b.txt", options).unwrap();
+        zip.start_file("b.txt", options.clone()).unwrap();
         zip.write_all(b"Contents of B\n").unwrap();
         zip.start_file("test/c.txt", options).unwrap();
         zip.write_all(b"Contents of C\n").unwrap();
