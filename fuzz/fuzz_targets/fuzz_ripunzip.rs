@@ -86,6 +86,7 @@ fuzz_target!(|input: Inputs| {
         output_directory: Some(output_directory.clone()),
         filename_filter: None,
         progress_reporter: Box::new(progress_reporter),
+        password: None,
     };
     let zipfile = tempdir.path().join("file.zip");
     let mut zip_data = Vec::new();
@@ -159,6 +160,7 @@ fn create_zip(output: &mut Vec<u8>, zip_members: &HashMap<ZipMemberFilename, Vec
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum ZipRsError {
     OpenFailed(std::io::Error),
     CreateExtractDirFailed(std::io::Error),
