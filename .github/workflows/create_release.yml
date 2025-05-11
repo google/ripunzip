@@ -1,0 +1,38 @@
+name: Create Github Release Files
+
+permissions:
+  contents: write
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  publish-rust:
+    name: Publish for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish CLI Binary
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          locked: true
+          # (required) Comma-separated list of binary names (non-extension portion of filename) to build and upload.# Note that glob pattern is not supported yet.
+          bin: ripunzip
+          # (optional) On which platform to distribute the .tar.gz file.# [default value: unix]# [possible values: all, unix, windows, none]
+          tar: unix
+          zip: windows
+          archive: $bin-$tag-$target
+          token: ${{ secrets.GITHUB_TOKEN }}
