@@ -1,0 +1,84 @@
+name: Create Github Release Files
+
+permissions:
+  contents: write
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  publish-exe-dmg:
+    name: Publish for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish Binary
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          locked: true
+          target: ${{ matrix.target }}
+          bin: ripunzip
+          tar: unix
+          zip: windows
+          archive: $bin_$tag_$target
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-deb:
+    name: Publish DEB for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+
+    env:
+      CARGO_TERM_COLOR: always
+      # set for github cli (gh)
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install `bininsatll`
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install `cargo deb`
+        run: cargo binstall cargo-deb --no-confirm
+
+      - name: Build Deb
+        run: cargo deb -- --locked
+
+      - name: Publish Deb
+        run: |
+          TARGET_DIR=${CARGO_TARGET_DIR:-./target}
+          DEB_FILE=$(find "$TARGET_DIR/debian" -name "*.deb" -type f | head -n 1)
+          gh release upload ${{ github.ref_name }} "$DEB_FILE" --clobber
