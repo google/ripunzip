@@ -30,11 +30,10 @@ or network bandwidth, or CPU time. Please consider the impact of your changes on
 permutations.
 
 Release procedure:
-1. Revise the version number
+
+1. Revise the version number.
 2. `cargo publish`
-3. Retrieve the latest `.deb` file from the latest CI job
-4. Declare a new release and tag on github
-5. As you make that release, include the `.deb` file as an artifact.
+3. Create a new release and tag on github.
 
 There's also `cargo fuzz` support for comparitive fuzzing against non-parallel unzipping
 to try to spot any unforeseen circumstances where we do anything differently. If you
@@ -52,4 +51,3 @@ Apache License (Version 2.0).
 
 See LICENSE for details.
 </sup>
-
