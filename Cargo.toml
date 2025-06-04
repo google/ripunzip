@@ -36,7 +36,7 @@ reqwest = { version = "0.11.13", features = ["blocking"] }
 tempfile = "3.3.0"
 thiserror = "1.0.37"
 wildmatch = "2.1.1"
-zip = "2.6"
+zip = "3.0"
 
 [dev-dependencies]
 hexdump = "0.1.1"
