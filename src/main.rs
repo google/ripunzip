@@ -10,11 +10,11 @@
 
 use std::{fmt::Write, fs::File, path::PathBuf, sync::RwLock};
 
-use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use ripunzip::{
-    FilenameFilter, NullProgressReporter, UnzipEngine, UnzipOptions, UnzipProgressReporter,
+    FilenameFilter, NullProgressReporter, RipunzipErrors, UnzipEngine, UnzipOptions,
+    UnzipProgressReporter,
 };
 use wildmatch::WildMatch;
 
@@ -114,7 +114,7 @@ struct UriArgs {
     readahead_limit: Option<usize>,
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<(), RipunzipErrors> {
     let args = RipunzipArgs::parse();
     env_logger::Builder::new()
         .filter_level(args.verbose.log_level_filter())
@@ -141,7 +141,11 @@ fn main() -> Result<()> {
     }
 }
 
-fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs, is_silent: bool) -> Result<()> {
+fn unzip(
+    engine: UnzipEngine,
+    unzip_args: UnzipArgs,
+    is_silent: bool,
+) -> Result<(), RipunzipErrors> {
     let filename_filter: Option<Box<dyn FilenameFilter + Sync>> =
         if unzip_args.filenames_to_unzip.is_empty() {
             None
@@ -169,12 +173,12 @@ fn unzip(engine: UnzipEngine, unzip_args: UnzipArgs, is_silent: bool) -> Result<
     engine.unzip(options)
 }
 
-fn construct_file_engine(file_args: FileArgs) -> Result<UnzipEngine> {
+fn construct_file_engine(file_args: FileArgs) -> Result<UnzipEngine, RipunzipErrors> {
     let zipfile = File::open(file_args.zipfile)?;
     UnzipEngine::for_file(zipfile)
 }
 
-fn construct_uri_engine(uri_args: UriArgs) -> Result<UnzipEngine> {
+fn construct_uri_engine(uri_args: UriArgs) -> Result<UnzipEngine, RipunzipErrors> {
     UnzipEngine::for_uri(
         &uri_args.uri,
         uri_args.readahead_limit,
@@ -182,7 +186,7 @@ fn construct_uri_engine(uri_args: UriArgs) -> Result<UnzipEngine> {
     )
 }
 
-fn list(engine: UnzipEngine) -> Result<()> {
+fn list(engine: UnzipEngine) -> Result<(), RipunzipErrors> {
     let files = engine.list()?;
     for f in files {
         println!("{}", f);

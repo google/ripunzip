@@ -19,12 +19,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, Result};
 use rayon::prelude::*;
 use zip::{read::ZipFile, ZipArchive};
 
-use crate::unzip::{
-    cloneable_seekable_reader::CloneableSeekableReader, progress_updater::ProgressUpdater,
+use crate::{
+    unzip::{
+        cloneable_seekable_reader::CloneableSeekableReader, progress_updater::ProgressUpdater,
+    },
+    RipunzipErrors,
 };
 
 use self::seekable_http_reader::{AccessPattern, SeekableHttpReader, SeekableHttpReaderEngine};
@@ -99,10 +101,10 @@ trait UnzipEngineImpl {
         &mut self,
         options: UnzipOptions,
         directory_creator: &DirectoryCreator,
-    ) -> Vec<anyhow::Error>;
+    ) -> Vec<RipunzipErrors>;
 
     // Due to lack of RPITIT we'll return a Vec<String> here
-    fn list(&self) -> Result<Vec<String>, anyhow::Error>;
+    fn list(&self) -> Result<Vec<String>, RipunzipErrors>;
 }
 
 /// Engine which knows how to unzip a file.
@@ -114,7 +116,7 @@ impl UnzipEngineImpl for UnzipFileEngine {
         &mut self,
         options: UnzipOptions,
         directory_creator: &DirectoryCreator,
-    ) -> Vec<anyhow::Error> {
+    ) -> Vec<RipunzipErrors> {
         unzip_serial_or_parallel(
             self.0.len(),
             options,
@@ -124,7 +126,7 @@ impl UnzipEngineImpl for UnzipFileEngine {
         )
     }
 
-    fn list(&self) -> Result<Vec<String>, anyhow::Error> {
+    fn list(&self) -> Result<Vec<String>, RipunzipErrors> {
         list(&self.0)
     }
 }
@@ -143,7 +145,7 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
         &mut self,
         options: UnzipOptions,
         directory_creator: &DirectoryCreator,
-    ) -> Vec<anyhow::Error> {
+    ) -> Vec<RipunzipErrors> {
         self.0
             .set_expected_access_pattern(AccessPattern::SequentialIsh);
         let result = unzip_serial_or_parallel(
@@ -160,14 +162,14 @@ impl<F: Fn()> UnzipEngineImpl for UnzipUriEngine<F> {
         result
     }
 
-    fn list(&self) -> Result<Vec<String>, anyhow::Error> {
+    fn list(&self) -> Result<Vec<String>, RipunzipErrors> {
         list(&self.1)
     }
 }
 
 impl UnzipEngine {
     /// Create an unzip engine which knows how to unzip a file.
-    pub fn for_file(mut zipfile: File) -> Result<Self> {
+    pub fn for_file(mut zipfile: File) -> Result<Self, RipunzipErrors> {
         // The following line doesn't actually seem to make any significant
         // performance difference.
         // let zipfile = BufReader::new(zipfile);
@@ -193,7 +195,7 @@ impl UnzipEngine {
         uri: &str,
         readahead_limit: Option<usize>,
         callback_on_rewind: F,
-    ) -> Result<Self> {
+    ) -> Result<Self, RipunzipErrors> {
         let seekable_http_reader = SeekableHttpReaderEngine::new(
             uri.to_string(),
             readahead_limit,
@@ -239,7 +241,7 @@ impl UnzipEngine {
     }
 
     // Perform the unzip.
-    pub fn unzip(mut self, options: UnzipOptions) -> Result<()> {
+    pub fn unzip(mut self, options: UnzipOptions) -> Result<(), RipunzipErrors> {
         log::debug!("Starting extract");
         options
             .progress_reporter
@@ -250,7 +252,7 @@ impl UnzipEngine {
     }
 
     /// List the filenames in the archive
-    pub fn list(self) -> Result<impl Iterator<Item = String>> {
+    pub fn list(self) -> Result<impl Iterator<Item = String>, RipunzipErrors> {
         // In future this might be a more dynamic iterator type.
         self.zipfile.list().map(|mut v| {
             // Names are returned in a HashMap iteration order so let's
@@ -264,7 +266,9 @@ impl UnzipEngine {
 /// Return a list of filenames from the zip. For now this is infallible
 /// but provide the option of an error code in case we do something
 /// smarter in future.
-fn list<'a, T: Read + Seek + 'a>(zip_archive: &ZipArchive<T>) -> Result<Vec<String>> {
+fn list<'a, T: Read + Seek + 'a>(
+    zip_archive: &ZipArchive<T>,
+) -> Result<Vec<String>, RipunzipErrors> {
     Ok(zip_archive.file_names().map(|s| s.to_string()).collect())
 }
 
@@ -275,7 +279,7 @@ fn unzip_serial_or_parallel<'a, T: Read + Seek + 'a>(
     get_ziparchive_clone: impl Fn() -> ZipArchive<T> + Sync,
     // Call when a file is going to be skipped
     file_skip_callback: impl Fn() + Sync + Send + Clone,
-) -> Vec<anyhow::Error> {
+) -> Vec<RipunzipErrors> {
     let progress_reporter: &dyn UnzipProgressReporter = options.progress_reporter.as_ref();
     match (options.filename_filter, options.single_threaded) {
         (None, true) => (0..len)
@@ -375,7 +379,7 @@ fn extract_file_by_index<'a, T: Read + Seek + 'a>(
     password: &Option<String>,
     progress_reporter: &dyn UnzipProgressReporter,
     directory_creator: &DirectoryCreator,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), RipunzipErrors> {
     let myzip: &mut zip::ZipArchive<T> = &mut get_ziparchive_clone();
     let file: ZipFile<T> = match password {
         None => myzip.by_index(i)?,
@@ -389,15 +393,20 @@ fn extract_file<R: Read>(
     output_directory: &Option<PathBuf>,
     progress_reporter: &dyn UnzipProgressReporter,
     directory_creator: &DirectoryCreator,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), RipunzipErrors> {
     let name = file
         .enclosed_name()
         .as_deref()
         .map(Path::to_string_lossy)
         .unwrap_or_else(|| Cow::Borrowed("<unprintable>"))
         .to_string();
-    extract_file_inner(file, output_directory, progress_reporter, directory_creator)
-        .with_context(|| format!("Failed to extract {name}"))
+    if let Err(e) = extract_file_inner(file, output_directory, progress_reporter, directory_creator)
+    {
+        eprintln!("Failed to extract {name}");
+        return Err(e);
+    }
+
+    Ok(())
 }
 
 /// Extracts a file from a zip file.
@@ -406,7 +415,7 @@ fn extract_file_inner<R: Read>(
     output_directory: &Option<PathBuf>,
     progress_reporter: &dyn UnzipProgressReporter,
     directory_creator: &DirectoryCreator,
-) -> Result<()> {
+) -> Result<(), RipunzipErrors> {
     let name = file
         .enclosed_name()
         .ok_or_else(|| std::io::Error::new(ErrorKind::Unsupported, "path not safe to extract"))?;
@@ -428,7 +437,10 @@ fn extract_file_inner<R: Read>(
         if let Some(parent) = out_path.parent() {
             directory_creator.create_dir_all(parent)?;
         }
-        let out_file = File::create(&out_path).with_context(|| "Failed to create file")?;
+        let out_file = File::create(&out_path).map_err(|e| RipunzipErrors::IOErrorWithContext {
+            context: format!("Failed to create file {}", out_path.display()),
+            source: e,
+        })?;
         // Progress bar strategy. The overall progress across the entire zip file must be
         // denoted in terms of *compressed* bytes, since at the outset we don't know the uncompressed
         // size of each file. Yet, within a given file, we update progress based on the bytes
@@ -450,15 +462,31 @@ fn extract_file_inner<R: Read>(
         });
         // Using a BufWriter here doesn't improve performance even on a VM with
         // spinny disks.
-        std::io::copy(&mut file, &mut out_file).with_context(|| "Failed to write directory")?;
+        if let Err(e) = std::io::copy(&mut file, &mut out_file) {
+            return Err(RipunzipErrors::IOErrorWithContext {
+                context: format!("Failed to write directory {:?}", out_file.into_inner()),
+                source: e,
+            });
+        }
         progress_updater.finish();
     }
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if let Some(mode) = file.unix_mode() {
-            std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))
-                .with_context(|| "Failed to set permissions")?;
+            if let Err(e) =
+                std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))
+            {
+                return Err(RipunzipErrors::IOErrorWithContext {
+                    context: format!(
+                        "Failed to set permissions {} for {}",
+                        mode,
+                        out_path.display()
+                    ),
+                    source: e,
+                });
+            }
         }
     }
     log::debug!(
@@ -477,7 +505,7 @@ fn extract_file_inner<R: Read>(
 struct DirectoryCreator(Mutex<()>);
 
 impl DirectoryCreator {
-    fn create_dir_all(&self, path: &Path) -> Result<()> {
+    fn create_dir_all(&self, path: &Path) -> Result<(), RipunzipErrors> {
         // Fast path - avoid locking if the directory exists
         if path.exists() {
             return Ok(());
@@ -486,7 +514,15 @@ impl DirectoryCreator {
         if path.exists() {
             return Ok(());
         }
-        std::fs::create_dir_all(path).with_context(|| "Failed to create directory")
+
+        if let Err(e) = std::fs::create_dir_all(path) {
+            return Err(RipunzipErrors::IOErrorWithContext {
+                context: format!("Failed to create directory {}", path.display()),
+                source: e,
+            });
+        }
+
+        Ok(())
     }
 }
 
