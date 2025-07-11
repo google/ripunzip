@@ -364,7 +364,7 @@ impl SeekableHttpReaderEngine {
         //     reinsert reading materials back into the state
         //     release STATE mutex
         //     NOTIFYALL on condvar
-        log::debug!("Read: requested position 0x{:x}.", pos);
+        log::debug!("Read: requested position 0x{pos:x}.");
 
         if pos == self.len {
             return Err(std::io::Error::new(
