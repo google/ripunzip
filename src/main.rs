@@ -189,7 +189,7 @@ fn construct_uri_engine(uri_args: UriArgs) -> Result<UnzipEngine, RipunzipErrors
 fn list(engine: UnzipEngine) -> Result<(), RipunzipErrors> {
     let files = engine.list()?;
     for f in files {
-        println!("{}", f);
+        println!("{f}");
     }
     Ok(())
 }
