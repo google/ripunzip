@@ -36,12 +36,14 @@ struct RipunzipArgs {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Lists a zip file
+    #[clap(visible_alias = "lf")]
     ListFile {
         #[command(flatten)]
         file_args: FileArgs,
     },
 
     /// Unzip a zip file
+    #[clap(visible_alias = "uf")]
     UnzipFile {
         #[command(flatten)]
         file_args: FileArgs,
@@ -51,12 +53,14 @@ enum Commands {
     },
 
     /// Lists a zip file from a URI
+    #[clap(visible_alias = "lu")]
     ListUri {
         #[command(flatten)]
         uri_args: UriArgs,
     },
 
     /// Unzips a zip file from a URI
+    #[clap(visible_alias = "uu")]
     UnzipUri {
         #[command(flatten)]
         uri_args: UriArgs,
